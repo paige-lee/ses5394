@@ -3,9 +3,208 @@ title: "P2_code"
 output: html_document
 ---
 
-test
+Original P2 assignment document: https://gsd-ses-5394-sp2025.github.io/examples/P2/P2.html
+
+# 1. Setup
+
+### Loading libraries and helper functions
+
+```{r, message = FALSE, warning = FALSE}
+# Loading libraries
+library(tidyverse)
+library(here)
+library(mlogit)
+library(knitr)
+library(caret)
+library(dplyr)
+library(dfidx)
+
+# Loading mlogit helper functions
+source(here::here("P2_vehicle_availability/mlogit_helpers.R"))
+```
+
+### Loading data 
 
 ```{r}
-2+2
+# Loading household-level data from the 2017 National Household Travel Survey (NHTS)
+hh_data <- here("P2_vehicle_availability", "data", "hhpub.csv") |> read_csv(show_col_types = FALSE)
+
+# Loading person-level data
+person_data <- here("P2_vehicle_availability", "data", "perpub.csv") |> read_csv(show_col_types = FALSE)
 ```
+
+# 2. Feature selection and engineering
+
+### Selecting variables
+
+```{r}
+# Select desired variables from the household data
+hh_data <- hh_data |> select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID)
+
+# Select desired variables from the person data
+person_data <- person_data |> select(HOUSEID, R_AGE, WORKER, DRIVER)
+```
+
+### Mutating and constructing variables
+
+#### Outcome variable
+
+The categorical vehicle availability outcome variable has the following three categories: 
+
+* Zero vehicles
+* Insufficient vehicles (fewer vehicles than drivers)
+* Sufficient vehicles (at least as many vehicles as drivers)
+
+```{r}
+# Categorical outcome variable
+hh_data <- hh_data |>
+  mutate(veh_avail = case_when(HHVEHCNT == 0 ~ "Zero",
+                               DRVRCNT > HHVEHCNT ~ "Insuff.",
+                               TRUE ~ "Suff."))
+```
+
+#### Number of children
+
+Number of children = number of people - number of adults in each household
+
+```{r}
+hh_data <- hh_data |>
+  mutate(n_child = HHSIZE - NUMADLT)
+```
+
+#### Number of seniors
+
+Using the person-level data, we can select those who are older than 64, group by household, and join that data with the household data
+
+```{r}
+n_seniors <- person_data |>
+  mutate(is_senior = R_AGE > 64) |>
+  group_by(HOUSEID) |>
+  summarise(n_seniors = sum(is_senior))
+
+hh_data <- hh_data |>
+  left_join(n_seniors)
+```
+
+#### Presence of a 3rd driver
+
+Binary variable for whether or not each household has more than two drivers
+
+```{r}
+hh_data <- hh_data |>
+  mutate(three_drivers = DRVRCNT > 2)
+```
+
+#### Number of drivers beyond two
+
+For households with more than two drivers, how many additional drivers do they have?
+
+```{r}
+hh_data <- hh_data |>
+  mutate(n_extra_drivers = ifelse(three_drivers, DRVRCNT - 2, 0))
+```
+
+#### Income 
+
+The low-income designation depends on both income and household size. Any household with income greater than $125,000, regardless of size, are designated as high income.
+
+```{r}
+hh_data <- hh_data |>
+  mutate(HHFAMINC = as.numeric(HHFAMINC)) |>
+  filter(HHFAMINC > 0) |>
+  mutate(income = case_when(HHFAMINC < 4 ~ "low",
+                             HHFAMINC < 5 & HHSIZE > 1 ~ "low",
+                             HHFAMINC < 6 & HHSIZE > 3 ~ "low",
+                             HHFAMINC < 7 & HHSIZE > 5 ~ "low",
+                             HHFAMINC < 8 & HHSIZE > 7 ~ "low",
+                             HHFAMINC > 8 ~ "high",
+                            TRUE ~ "medium")) |>
+    mutate(income = factor(income, levels = c("medium", "low", "high")))
+```
+
+#### Non-worker driver
+
+Binary variable for whether there is anyone in a given household who is a driver but not a worker
+
+```{r}
+non_work_driver <- person_data |>
+  mutate(non_work_driver = WORKER == "02" & DRIVER == "01") |>
+  group_by(HOUSEID) |>
+  summarise(non_work_driver = max(non_work_driver))
+
+hh_data <- hh_data |>
+  left_join(non_work_driver)
+```
+
+#### Density
+
+The density of the household's census block group can be used to classify a household's neighborhoods as high, medium, or low density
+
+```{r}
+hh_data <- hh_data |>
+  filter(HBPPOPDN > 0) |>
+  mutate(density = case_when(HBPPOPDN < 7000 ~ "Low",
+                             HBPPOPDN < 10000 ~ "High",
+                             TRUE ~ "Medium"))
+```
+
+### Dropping variables we won't be using
+
+```{r}
+hh_data <- hh_data |> select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density)
+```
+
+### Splitting data into training and testing
+
+We're splitting the data into 50% training to use to train the model and 50% testing to test the model on new, unseen data
+
+```{r}
+# Take a random sample of 50% of the IDs in the data
+hh_data_train_ids <- sample(hh_data$HOUSEID, 
+                        size = ceiling(nrow(hh_data)/2))
+
+# Assign these IDs to constitute the training set
+hh_data_train <- hh_data |>
+  filter(HOUSEID %in% hh_data_train_ids)
+
+# Assign the remaining unused IDs to constitute the testing set
+hh_data_test <- hh_data |> 
+  filter(!(HOUSEID %in% hh_data_train_ids))
+```
+
+### Creating dfidx data
+
+The mlogit package for multinomial logistic regression requires the data to be in the dfidx format 
+
+```{r}
+# Create the dfidx datasets
+veh_dfidx_train <- fn_make_dfidx(hh_data_train,
+                                "HOUSEID",
+                                "veh_avail")
+
+veh_dfidx_test <- fn_make_dfidx(hh_data_test,
+                                "HOUSEID",
+                                "veh_avail")
+```
+
+```{r}
+# Convert the appropriate categorical variables to factors
+veh_dfidx_train$income <- factor(veh_dfidx_train$income)
+veh_dfidx_test$income <- factor(veh_dfidx_test$income)
+
+veh_dfidx_train$density <- factor(veh_dfidx_train$density)
+veh_dfidx_test$density <- factor(veh_dfidx_test$density)
+```
+
+# 3. Modeling
+
+We will fit a multinomial logistic regression model
+
+```{r}
+model_veh <- mlogit(choice ~ WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density | 0,
+                    data = veh_dfidx_train)
+
+summary(model_veh)
+```
+
 
