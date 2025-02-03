@@ -2,4 +2,4 @@
 .Rhistory
 .RData
 .Ruserdata
-*.Rproj
+*.RprojP2_vehicle_availability/data/*.csv
