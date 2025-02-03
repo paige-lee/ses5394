@@ -3,3 +3,4 @@
 .RData
 .Ruserdata
 *.RprojP2_vehicle_availability/data/*.csv
+P2_vehicle_availability/data/*.csv
