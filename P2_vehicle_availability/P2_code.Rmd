@@ -1,5 +1,5 @@
 ---
-title: "P2_code"
+title: "Paige Lee, P2 code"
 output: html_document
 ---
 
@@ -76,7 +76,7 @@ hh_data <- hh_data |>
 
 Using the person-level data, we can select those who are older than 64, group by household, and join that data with the household data
 
-```{r}
+```{r, message = FALSE}
 n_seniors <- person_data |>
   mutate(is_senior = R_AGE > 64) |>
   group_by(HOUSEID) |>
@@ -126,7 +126,7 @@ hh_data <- hh_data |>
 
 Binary variable for whether there is anyone in a given household who is a driver but not a worker
 
-```{r}
+```{r, message = FALSE}
 non_work_driver <- person_data |>
   mutate(non_work_driver = WORKER == "02" & DRIVER == "01") |>
   group_by(HOUSEID) |>
@@ -159,6 +159,8 @@ hh_data <- hh_data |> select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n
 We're splitting the data into 50% training to use to train the model and 50% testing to test the model on new, unseen data
 
 ```{r}
+set.seed(1)
+
 # Take a random sample of 50% of the IDs in the data
 hh_data_train_ids <- sample(hh_data$HOUSEID, 
                         size = ceiling(nrow(hh_data)/2))
@@ -201,10 +203,75 @@ veh_dfidx_test$density <- factor(veh_dfidx_test$density)
 We will fit a multinomial logistic regression model
 
 ```{r}
-model_veh <- mlogit(choice ~ WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density | 0,
-                    data = veh_dfidx_train)
+model_veh <- mlogit(choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density | 0, veh_dfidx_train, reflevel = "Suff.")
 
 summary(model_veh)
 ```
+
+The regression coefficients represent the "utility of an alternative." For example, if the coefficient `n_child:Insuff.` is 0.2 and the coefficient `n_child:Zero` is -0.13, that means relative to having sufficient vehicles (the intercept), each additional child in a household increases the utility of having insufficient vehicles (positive coefficient) and decreases the utility of having zero vehicles (negative coefficient). 
+
+# 4. Making predictions
+
+Making predictions using the test set (new/unseen). The output contains the head (first five rows) of the predictions, showing the predicted probabilities that each household has sufficient, insufficient, or zero vehicles (the response variable). 
+
+```{r, message = FALSE, warning = FALSE}
+predicts_test <- predict(model_veh, veh_dfidx_test) |>
+  as.data.frame() |>
+  rownames_to_column("HOUSEID") |>
+  mutate(HOUSEID = as.numeric(HOUSEID)) |>
+  left_join(hh_data_test)
+
+head(predicts_test) |>
+  kable()
+```
+
+# 5. Evaluating the model
+
+```{r}
+# Designate the alternative with the highest predictive probability as the most likely choice 
+predicts_test <- predicts_test |>
+  mutate(most_likely = case_when((Suff. > Insuff.) & (Suff. > Zero) ~ "Suff.",
+                                 (Zero > Insuff.) & (Zero > Suff.) ~ "Zero",
+                                 TRUE ~ "Insuff.")) 
+
+# Convert the most_likely and veh_avail variables to factors 
+predicts_test <- predicts_test |>
+  mutate(most_likely = factor(most_likely, 
+                              levels = c("Suff.", "Insuff.", "Zero"))) |>
+  mutate(veh_avail = factor(veh_avail,
+                            levels = c("Suff.", "Insuff.", "Zero"))) |>
+  mutate(correct = veh_avail == most_likely)
+
+# Calculate a confusion matrix to generate accuracy and reliability statistics 
+confusionMatrix(data = predicts_test$most_likely,
+                reference = predicts_test$veh_avail)
+```
+
+Definitions
+
+* **No information rate:** the accuracy you would achieve if you had no model and just classified every household as the most common value among Suff, Insuff, and Zero. 
+* **Sensitivity:** the percent of true positives that were correctly identified $\rightarrow$ true positive rate
+  - A highly sensitive test will have few false negatives
+  - Ex. high sensitivity $\rightarrow$ model misses fewer disease cases
+* **Specificity:** the percent of true negatives that were correctly identified $\rightarrow$ true negative rate
+  - A highly specific test will have few false positives
+  - Ex. high specificity $\rightarrow$ model correctly identifies more people who don't have the disease
+* **Positive predictive value:** the probability that a positive prediction is correct $\rightarrow$ measures accuracy  
+  - $PPV = \frac{TP}{TP + FP}$
+* **Negative predictive value:** the probability that a negative prediction is correct $\rightarrow$ measures accuracy
+  - $NPV = \frac{TN}{TN + FN}$
+* **Prevalence:** the percent of observations in each category
+* **Detection rate:** the proportion of true positive cases that are correctly identified by the test
+  - true positives / total positives
+  - Represents the sensitivity of a test $\rightarrow$ how well can the test identify TPs when they're present
+* **Detection prevalence:** the proportion of all predicted positive cases (TPs and FPs) within a population
+  - predicted positives / total predictions
+  - Represents the proportion of cases flagged as positive by the test $\rightarrow$ includes TPs and FPs
+* **Balanced accuracy:** the average of a model's sensitivity and specificity     - (sensitivity + specificity) / 2
+
+# 6. Building a new model 
+
+Can we estimate a vehicle availability model that performs better than this one? 
+
 
 
