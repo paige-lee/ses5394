@@ -366,6 +366,7 @@ library(knitr)
 library(caret)
 library(dplyr)
 library(dfidx)
+library(MASS)
 
 # Loading mlogit helper functions
 source(here::here(&quot;P2_vehicle_availability/mlogit_helpers.R&quot;))</code></pre>
@@ -384,10 +385,10 @@ person_data &lt;- here(&quot;P2_vehicle_availability&quot;, &quot;data&quot;, &q
 <div id="selecting-variables" class="section level3">
 <h3>Selecting variables</h3>
 <pre class="r"><code># Select desired variables from the household data
-hh_data &lt;- hh_data |&gt; select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID)
+hh_data &lt;- hh_data |&gt; dplyr::select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID)
 
 # Select desired variables from the person data
-person_data &lt;- person_data |&gt; select(HOUSEID, R_AGE, WORKER, DRIVER)</code></pre>
+person_data &lt;- person_data |&gt; dplyr::select(HOUSEID, R_AGE, WORKER, DRIVER)</code></pre>
 </div>
 <div id="mutating-and-constructing-variables" class="section level3">
 <h3>Mutating and constructing variables</h3>
@@ -481,7 +482,7 @@ classify a household’s neighborhoods as high, medium, or low density</p>
 </div>
 <div id="dropping-variables-we-wont-be-using" class="section level3">
 <h3>Dropping variables we won’t be using</h3>
-<pre class="r"><code>hh_data &lt;- hh_data |&gt; select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density)</code></pre>
+<pre class="r"><code>hh_data &lt;- hh_data |&gt; dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density)</code></pre>
 </div>
 <div id="splitting-data-into-training-and-testing" class="section level3">
 <h3>Splitting data into training and testing</h3>
@@ -539,7 +540,7 @@ summary(model_veh)</code></pre>
 ## 0.883323 0.068361 0.048316 
 ## 
 ## nr method
-## 9 iterations, 0h:0m:4s 
+## 9 iterations, 0h:0m:5s 
 ## g&#39;(-H)^-1g = 0.000126 
 ## successive function values within tolerance limits 
 ## 
@@ -826,6 +827,567 @@ sensitivity and specificity - (sensitivity + specificity) / 2</li>
 <h1>6. Building a new model</h1>
 <p>Can we estimate a vehicle availability model that performs better
 than this one?</p>
+<p>Data dictionary: <a href="https://nhts.ornl.gov/tables09/CodebookBrowser.aspx" class="uri">https://nhts.ornl.gov/tables09/CodebookBrowser.aspx</a></p>
+<p>Description of the steps I took to get to my final model</p>
+<ul>
+<li>Variables used in the current model: WRKCOUNT, n_child, n_seniors,
+n_extra_drivers, three_drivers, non_work_driver, income, density</li>
+<li>Model 1
+<ul>
+<li>Variables I added: TRAVDAY (travel day of the week), URBAN
+(household’s urban area classification), HH_RACE (race of household
+respondent), WEBUSE17 (frequency of internet use)</li>
+<li>The model’s performance metrics didn’t improve much, especially
+considering many more predictors were added due to the additional
+categorical variables with multiple levels.</li>
+</ul></li>
+<li>Model 2
+<ul>
+<li>Drop WEBUSE17 since none of the predictors were significant</li>
+<li>Transform TRAVDAY to just have two levels: weekday or weekend
+<ul>
+<li>Sunday is coded as 01, and Saturday is coded as 07</li>
+</ul></li>
+</ul></li>
+<li>Model 3
+<ul>
+<li>Transform the HH_RACE variable into “white” or “non-white” since
+whites make up the vast majority of observations. Drop “refused” and
+“don’t know” observations (missing).</li>
+</ul></li>
+<li>Model 4
+<ul>
+<li>Transform URBAN into “urban” for 01, 02, 03 and “non-urban” for
+04</li>
+<li>01 is urban area, 02 is urban cluster, and 03 is surrounding
+urban</li>
+<li>04 is not urban</li>
+<li>Goal is to reduce the number of predictors especially since only
+urban04 is significant, but urban 01-03 are not</li>
+</ul></li>
+<li>Model 5
+<ul>
+<li>Remove TRAVDAY_transformed from the model <span class="math inline">\(\rightarrow\)</span> model worsens a bit <span class="math inline">\(\rightarrow\)</span> add TRAVDAY_transformed
+back</li>
+</ul></li>
+<li>Model 6
+<ul>
+<li>Add EDUC to the model, dropping missing values</li>
+<li>EDUC is from the person-level data, so we must join it with the
+household level data</li>
+<li>Select the highest education level in each household and assign that
+as the household’s education level since EDUC is an ordinal
+variable</li>
+</ul></li>
+<li>Model 7
+<ul>
+<li>Adding education was good, but we want to reduce the number of
+predictors since not all were significant</li>
+<li>After taking the maximum education level of a household, convert it
+to low or high education (categorical)</li>
+<li>Group 01, 02, and 03 together <span class="math inline">\(\rightarrow\)</span> less than high schoo, high
+school, and some college or associates degree <span class="math inline">\(\rightarrow\)</span> low_educ</li>
+<li>Group 04 and 04 together <span class="math inline">\(\rightarrow\)</span> bachelor’s degree, graduate
+or professional degree <span class="math inline">\(\rightarrow\)</span>
+high_educ</li>
+</ul></li>
+<li>Model 8
+<ul>
+<li>Add CNTTDHH to the model <span class="math inline">\(\rightarrow\)</span> count of household trips on
+travel day (numeric)</li>
+</ul></li>
+<li>Model 9
+<ul>
+<li>Add the medical condition variables <span class="math inline">\(\rightarrow\)</span> CONDNIGH, CONDPUB, CONDRIDE,
+CONDRIVE, CONDSPEC, CONTAX, CONTRAV</li>
+<li>These are person-level variables <span class="math inline">\(\rightarrow\)</span> merge by household, and take
+the lowest value (yes is coded as 01, no is coded as 02), and drop
+NAs</li>
+<li>This addition lowered the accuracy and sensitivity, but it increased
+the specificity</li>
+</ul></li>
+<li>Model 10
+<ul>
+<li>Add bike, bus, car, rail, taxi, train, walk (all household
+variables)</li>
+<li>Convert 1, 2, 3 to “regularly” and 4, 5 to “not_regularly”</li>
+<li>Drop NAs (coded as negative values)</li>
+<li>Removed RAIL_transformed since all values got converted to
+“regularly”</li>
+<li>This addition increased the specificity even more</li>
+</ul></li>
+<li>Model 11
+<ul>
+<li>Add HOMEOWN and HH_HISP</li>
+<li>Convert HH_HISP to binary and remove NAs</li>
+<li>Drop NAs from HOMEOWN</li>
+</ul></li>
+<li>Model 12
+<ul>
+<li>Now that we’ve included many variables, it’s time to use stepwise
+methods for variable selection</li>
+</ul></li>
+</ul>
+<div id="performing-variable-selection-data-cleaning-and-feature-engineering-again" class="section level3">
+<h3>Performing variable selection, data cleaning, and feature
+engineering again</h3>
+<pre class="r"><code># Loading household-level data from the 2017 National Household Travel Survey (NHTS)
+hh_data &lt;- here(&quot;P2_vehicle_availability&quot;, &quot;data&quot;, &quot;hhpub.csv&quot;) |&gt; read_csv(show_col_types = FALSE)
+
+# Loading person-level data
+person_data &lt;- here(&quot;P2_vehicle_availability&quot;, &quot;data&quot;, &quot;perpub.csv&quot;) |&gt; read_csv(show_col_types = FALSE)
+
+# Selecting desired variables from the NHTS data
+hh_data &lt;- hh_data |&gt; dplyr::select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID, TRAVDAY, URBAN, HH_RACE, CNTTDHH, BIKE, BUS, CAR, RAIL, TAXI, TRAIN, WALK, HOMEOWN, HH_HISP)
+
+# Select desired variables from the person data
+person_data &lt;- person_data |&gt; dplyr::select(HOUSEID, R_AGE, WORKER, DRIVER, EDUC, CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONDTAX, CONDTRAV)
+
+# Categorical outcome variable
+hh_data &lt;- hh_data |&gt;
+  mutate(veh_avail = case_when(HHVEHCNT == 0 ~ &quot;Zero&quot;,
+                               DRVRCNT &gt; HHVEHCNT ~ &quot;Insuff.&quot;,
+                               TRUE ~ &quot;Suff.&quot;))
+
+# Number of children
+hh_data &lt;- hh_data |&gt;
+  mutate(n_child = HHSIZE - NUMADLT)
+
+# Number of seniors
+n_seniors &lt;- person_data |&gt;
+  mutate(is_senior = R_AGE &gt; 64) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(n_seniors = sum(is_senior))
+
+hh_data &lt;- hh_data |&gt;
+  left_join(n_seniors)
+
+# Presence of a 3rd driver
+hh_data &lt;- hh_data |&gt;
+  mutate(three_drivers = DRVRCNT &gt; 2)
+
+# Number of drivers beyond two
+hh_data &lt;- hh_data |&gt;
+  mutate(n_extra_drivers = ifelse(three_drivers, DRVRCNT - 2, 0))
+
+# Income
+# NOTE: missing values (coded as negative) are dropped!
+hh_data &lt;- hh_data |&gt;
+  mutate(HHFAMINC = as.numeric(HHFAMINC)) |&gt;
+  filter(HHFAMINC &gt; 0) |&gt;
+  mutate(income = case_when(HHFAMINC &lt; 4 ~ &quot;low&quot;,
+                             HHFAMINC &lt; 5 &amp; HHSIZE &gt; 1 ~ &quot;low&quot;,
+                             HHFAMINC &lt; 6 &amp; HHSIZE &gt; 3 ~ &quot;low&quot;,
+                             HHFAMINC &lt; 7 &amp; HHSIZE &gt; 5 ~ &quot;low&quot;,
+                             HHFAMINC &lt; 8 &amp; HHSIZE &gt; 7 ~ &quot;low&quot;,
+                             HHFAMINC &gt; 8 ~ &quot;high&quot;,
+                            TRUE ~ &quot;medium&quot;)) |&gt;
+    mutate(income = factor(income, levels = c(&quot;medium&quot;, &quot;low&quot;, &quot;high&quot;)))
+
+# Non-worker driver
+non_work_driver &lt;- person_data |&gt;
+  mutate(non_work_driver = WORKER == &quot;02&quot; &amp; DRIVER == &quot;01&quot;) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(non_work_driver = max(non_work_driver))
+
+hh_data &lt;- hh_data |&gt;
+  left_join(non_work_driver)
+
+# Density
+hh_data &lt;- hh_data |&gt;
+  filter(HBPPOPDN &gt; 0) |&gt;
+  mutate(density = case_when(HBPPOPDN &lt; 7000 ~ &quot;Low&quot;,
+                             HBPPOPDN &lt; 10000 ~ &quot;High&quot;,
+                             TRUE ~ &quot;Medium&quot;))
+
+# Travel day transformed
+hh_data$TRAVDAY_transformed &lt;- ifelse(as.numeric(hh_data$TRAVDAY) %in% c(1, 7), &quot;weekend&quot;, &quot;weekday&quot;)
+
+# Race transformed
+# Drop the missing values (negative values)
+hh_data &lt;- hh_data |&gt; 
+  mutate(HH_RACE = as.numeric(HH_RACE)) |&gt; 
+  filter(HH_RACE &gt; 0) |&gt;  
+  mutate(HH_RACE_transformed = case_when(
+    HH_RACE == 1 ~ &quot;white&quot;,
+    HH_RACE &gt; 1 ~ &quot;non-white&quot;
+  ))
+
+# Urban transformed
+hh_data &lt;- hh_data |&gt;
+  mutate(URBAN = as.numeric(URBAN)) |&gt;
+  mutate(URBAN_transformed = case_when(
+    URBAN &lt; 4 ~ &quot;urban&quot;,
+    URBAN == 4 ~ &quot;non-urban&quot;
+  ))
+
+# Educ transformed, filtered out NAs
+# First take the max education of each household, then assign low or high educ labels
+EDUC_transformed &lt;- person_data |&gt; 
+  mutate(EDUC = as.numeric(EDUC)) |&gt; 
+  filter(EDUC &gt; 0) |&gt; 
+  group_by(HOUSEID) |&gt; 
+  summarise(EDUC_transformed = case_when(
+    max(EDUC, na.rm = TRUE) &lt;= 3 ~ &quot;low_educ&quot;,
+    max(EDUC, na.rm = TRUE) &gt; 3 ~ &quot;high_educ&quot;
+  ), .groups = &quot;drop&quot;)
+
+hh_data &lt;- hh_data |&gt;
+  left_join(EDUC_transformed, by = &quot;HOUSEID&quot;)
+
+# Convert CNTTDHH to numeric
+hh_data$CNTTDHH &lt;- as.numeric(hh_data$CNTTDHH)
+
+# CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONDTAX, CONDTRAV
+# Join person-level data with household-level data and drop NAs
+CONDNIGH &lt;- person_data |&gt;
+  mutate(CONDNIGH = as.numeric(CONDNIGH)) |&gt;
+  filter(CONDNIGH &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDNIGH = as.logical(if_else(max(CONDNIGH, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDNIGH, by = &quot;HOUSEID&quot;) 
+
+CONDPUB &lt;- person_data |&gt;
+  mutate(CONDPUB = as.numeric(CONDPUB)) |&gt;
+  filter(CONDPUB &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDPUB = as.logical(if_else(max(CONDPUB, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDPUB, by = &quot;HOUSEID&quot;)
+
+CONDRIDE &lt;- person_data |&gt;
+  mutate(CONDRIDE = as.numeric(CONDRIDE)) |&gt;
+  filter(CONDRIDE &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDRIDE = as.logical(if_else(max(CONDRIDE, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDRIDE, by = &quot;HOUSEID&quot;)
+
+CONDRIVE &lt;- person_data |&gt;
+  mutate(CONDRIVE = as.numeric(CONDRIVE)) |&gt;
+  filter(CONDRIVE &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDRIVE = as.logical(if_else(max(CONDRIVE, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDRIVE, by = &quot;HOUSEID&quot;)
+
+CONDSPEC &lt;- person_data |&gt;
+  mutate(CONDSPEC = as.numeric(CONDSPEC)) |&gt;
+  filter(CONDSPEC &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDSPEC = as.logical(if_else(max(CONDSPEC, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDSPEC, by = &quot;HOUSEID&quot;)
+
+CONDTAX &lt;- person_data |&gt;
+  mutate(CONDTAX = as.numeric(CONDTAX)) |&gt;
+  filter(CONDTAX &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDTAX = as.logical(if_else(max(CONDTAX, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDTAX, by = &quot;HOUSEID&quot;)
+
+CONDTRAV &lt;- person_data |&gt;
+  mutate(CONDTRAV = as.numeric(CONDTRAV)) |&gt;
+  filter(CONDTRAV &gt; 0) |&gt;
+  group_by(HOUSEID) |&gt;
+  summarise(CONDTRAV = as.logical(if_else(max(CONDTRAV, na.rm = TRUE) == 2, 0, 1)), .groups = &quot;drop&quot;)
+hh_data &lt;- hh_data |&gt;
+  left_join(CONDTRAV, by = &quot;HOUSEID&quot;)
+
+# Transforming BIKE, BUS, CAR, RAIL, TAXI, TRAIN, WALK
+hh_data &lt;- hh_data |&gt;
+  mutate(BIKE = as.numeric(BIKE)) |&gt;
+  mutate(BIKE_transformed = case_when(
+    BIKE &lt; 4 ~ &quot;regularly&quot;,
+    BIKE &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+hh_data &lt;- hh_data |&gt;
+  mutate(BUS = as.numeric(BUS)) |&gt;
+  mutate(BUS_transformed = case_when(
+    BUS &lt; 4 ~ &quot;regularly&quot;,
+    BUS &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+hh_data &lt;- hh_data |&gt;
+  mutate(CAR = as.numeric(CAR)) |&gt;
+  mutate(CAR_transformed = case_when(
+    CAR &lt; 4 ~ &quot;regularly&quot;,
+    CAR &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+hh_data &lt;- hh_data |&gt;
+  mutate(RAIL = as.numeric(RAIL)) |&gt;
+  mutate(RAIL_transformed = case_when(
+    RAIL &lt; 4 ~ &quot;regularly&quot;,
+    RAIL &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+hh_data &lt;- hh_data |&gt;
+  mutate(TAXI = as.numeric(TAXI)) |&gt;
+  mutate(TAXI_transformed = case_when(
+    TAXI &lt; 4 ~ &quot;regularly&quot;,
+    TAXI &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+hh_data &lt;- hh_data |&gt;
+  mutate(TRAIN = as.numeric(TRAIN)) |&gt;
+  mutate(TRAIN_transformed = case_when(
+    TRAIN &lt; 4 ~ &quot;regularly&quot;,
+    TRAIN &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+hh_data &lt;- hh_data |&gt;
+  mutate(WALK = as.numeric(WALK)) |&gt;
+  mutate(WALK_transformed = case_when(
+    WALK &lt; 4 ~ &quot;regularly&quot;,
+    WALK &gt;=4 ~ &quot;non_regularly&quot;
+  ) |&gt; as.factor())
+
+# HOMEOWN drop NAs
+hh_data &lt;- hh_data |&gt;
+  mutate(HOMEOWN = as.numeric(HOMEOWN)) |&gt;
+  filter(HOMEOWN &gt; 0)
+
+# HH_HISP drop NAs and convert to binary
+hh_data &lt;- hh_data |&gt;
+  mutate(HH_HISP = as.numeric(HH_HISP)) |&gt;
+  filter(HH_HISP &gt; 0) |&gt;
+  mutate(HH_HISP = as.logical(if_else(HH_HISP == 2, 0, 1)))
+
+# Selecting the variables we want
+hh_data &lt;- hh_data |&gt; dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density, TRAVDAY_transformed, URBAN_transformed, HH_RACE_transformed, EDUC_transformed, CNTTDHH, CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONDTAX, CONDTRAV, BIKE_transformed, BUS_transformed, CAR_transformed, RAIL_transformed, TAXI_transformed, TRAIN_transformed, WALK_transformed, HOMEOWN, HH_HISP)
+
+# Convert categorical variables to factors
+hh_data$veh_avail &lt;- factor(hh_data$veh_avail)
+hh_data$density &lt;- factor(hh_data$density)
+hh_data$TRAVDAY_transformed &lt;- factor(hh_data$TRAVDAY_transformed)
+hh_data$URBAN_transformed &lt;- factor(hh_data$URBAN_transformed)
+hh_data$HH_RACE_transformed &lt;- factor(hh_data$HH_RACE_transformed)
+hh_data$EDUC_transformed &lt;- factor(hh_data$EDUC_transformed)</code></pre>
+</div>
+<div id="train-test-split-and-convert-to-dfidx-format" class="section level3">
+<h3>Train test split and convert to dfidx format</h3>
+<pre class="r"><code>set.seed(1)
+
+# Take a random sample of 50% of the IDs in the data
+hh_data_train_ids &lt;- sample(hh_data$HOUSEID, 
+                        size = ceiling(nrow(hh_data)/2))
+
+# Assign these IDs to constitute the training set
+hh_data_train &lt;- hh_data |&gt;
+  filter(HOUSEID %in% hh_data_train_ids)
+
+# Assign the remaining unused IDs to constitute the testing set
+hh_data_test &lt;- hh_data |&gt; 
+  filter(!(HOUSEID %in% hh_data_train_ids))
+
+# Create the dfidx datasets
+veh_dfidx_train &lt;- fn_make_dfidx(hh_data_train,
+                                &quot;HOUSEID&quot;,
+                                &quot;veh_avail&quot;)
+
+veh_dfidx_test &lt;- fn_make_dfidx(hh_data_test,
+                                &quot;HOUSEID&quot;,
+                                &quot;veh_avail&quot;)</code></pre>
+</div>
+<div id="modeling-1" class="section level3">
+<h3>Modeling</h3>
+<pre class="r"><code># Full model, eval = FALSE (before stepwise variable selection)
+model_veh &lt;- mlogit(choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density + TRAVDAY_transformed + URBAN_transformed + HH_RACE_transformed + EDUC_transformed + CNTTDHH + CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + CONDTRAV + BIKE_transformed + BUS_transformed + CAR_transformed + TAXI_transformed + TRAIN_transformed + WALK_transformed + HOMEOWN + HH_HISP | 0, veh_dfidx_train, reflevel = &quot;Suff.&quot;)
+
+summary(model_veh)</code></pre>
+</div>
+<div id="stepwise-variable-selection" class="section level3">
+<h3>Stepwise variable selection</h3>
+<pre class="r"><code># Set to eval = FALSE because I don&#39;t need to perform stepwise variable selection everytime; just once to find the best subset of predictors
+# Define a stepwise variable selection function for mlogit since it&#39;s not compatible with the built in AIC functions
+# This function is from ChatGPT
+stepwise_mlogit &lt;- function(data, full_formula) {
+  # Fit the full model
+  current_model &lt;- mlogit(full_formula, data, reflevel = &quot;Suff.&quot;)
+  best_aic &lt;- AIC(current_model)
+  
+  # Extract predictor variable names
+  predictors &lt;- all.vars(update(full_formula, . ~ . - 0))[!all.vars(update(full_formula, . ~ . - 0)) %in% c(&quot;choice&quot;)]
+
+  total_vars &lt;- length(predictors)  # Count total variables
+  step &lt;- 1  # Track step number
+  
+  for (var in predictors) {
+    new_predictors &lt;- setdiff(predictors, var)  # Remove one variable
+    new_formula &lt;- as.formula(paste(&quot;choice ~ 0 |&quot;, paste(new_predictors, collapse = &quot; + &quot;), &quot;| 0&quot;))
+    
+    message(paste(&quot;Step&quot;, step, &quot;of&quot;, total_vars, &quot;- Removing:&quot;, var))
+    
+    # Fit new model
+    new_model &lt;- mlogit(new_formula, data, reflevel = &quot;Suff.&quot;)
+    new_aic &lt;- AIC(new_model)
+    
+    # Keep the model if it improves AIC
+    if (new_aic &lt; best_aic) {
+      best_aic &lt;- new_aic
+      current_model &lt;- new_model
+      predictors &lt;- new_predictors  # Update remaining variables
+    }
+    
+    step &lt;- step + 1  # Increment step count
+  }
+  
+  message(&quot;Stepwise selection complete. Best AIC:&quot;, best_aic)
+  return(current_model)
+}
+
+# Define the full model formula
+full_formula &lt;- choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density + TRAVDAY_transformed + URBAN_transformed + HH_RACE_transformed + EDUC_transformed + CNTTDHH + CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + CONDTRAV + BIKE_transformed + BUS_transformed + CAR_transformed + TAXI_transformed + TRAIN_transformed + WALK_transformed | 0
+
+# Run stepwise selection
+best_model &lt;- stepwise_mlogit(veh_dfidx_train, full_formula)
+
+# View the final selected model
+summary(best_model)</code></pre>
+<pre class="r"><code># Final model after stepwise variable selection
+model_veh &lt;- mlogit(choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density + URBAN_transformed + HH_RACE_transformed + CNTTDHH + CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + CONDTRAV + BUS_transformed + CAR_transformed + TAXI_transformed + TRAIN_transformed + WALK_transformed | 0, veh_dfidx_train, reflevel = &quot;Suff.&quot;)
+
+summary(model_veh)</code></pre>
+<pre><code>## 
+## Call:
+## mlogit(formula = choice ~ 0 | WRKCOUNT + n_child + n_seniors + 
+##     n_extra_drivers + three_drivers + non_work_driver + income + 
+##     density + URBAN_transformed + HH_RACE_transformed + CNTTDHH + 
+##     CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + 
+##     CONDTRAV + BUS_transformed + CAR_transformed + TAXI_transformed + 
+##     TRAIN_transformed + WALK_transformed | 0, data = veh_dfidx_train, 
+##     reflevel = &quot;Suff.&quot;, method = &quot;nr&quot;)
+## 
+## Frequencies of alternatives:choice
+##    Suff.  Insuff.     Zero 
+## 0.801393 0.095314 0.103293 
+## 
+## nr method
+## 9 iterations, 0h:0m:2s 
+## g&#39;(-H)^-1g = 3.6E-06 
+## successive function values within tolerance limits 
+## 
+## Coefficients :
+##                                      Estimate Std. Error  z-value  Pr(&gt;|z|)    
+## (Intercept):Insuff.                -4.6941326  0.3552496 -13.2136 &lt; 2.2e-16 ***
+## (Intercept):Zero                    1.7336125  0.3352380   5.1713 2.325e-07 ***
+## WRKCOUNT:Insuff.                    0.3123005  0.0601242   5.1943 2.055e-07 ***
+## WRKCOUNT:Zero                      -2.8755573  0.1489194 -19.3095 &lt; 2.2e-16 ***
+## n_child:Insuff.                     0.2271301  0.0485547   4.6778 2.899e-06 ***
+## n_child:Zero                       -0.1950307  0.1123843  -1.7354 0.0826715 .  
+## n_seniors:Insuff.                   0.4582923  0.0439432  10.4292 &lt; 2.2e-16 ***
+## n_seniors:Zero                     -0.6799440  0.0916950  -7.4153 1.215e-13 ***
+## n_extra_drivers:Insuff.             0.2596335  0.1217158   2.1331 0.0329156 *  
+## n_extra_drivers:Zero                2.0561934  0.6527013   3.1503 0.0016311 ** 
+## three_driversTRUE:Insuff.           0.9564769  0.1720882   5.5581 2.728e-08 ***
+## three_driversTRUE:Zero             -1.7006101  1.0768996  -1.5792 0.1142965    
+## non_work_driver:Insuff.             1.2486129  0.1450438   8.6085 &lt; 2.2e-16 ***
+## non_work_driver:Zero               -3.5327716  0.1461093 -24.1790 &lt; 2.2e-16 ***
+## incomelow:Insuff.                   0.5325811  0.0659922   8.0704 6.661e-16 ***
+## incomelow:Zero                      1.3263354  0.1358369   9.7642 &lt; 2.2e-16 ***
+## incomehigh:Insuff.                 -0.5000855  0.1385884  -3.6084 0.0003081 ***
+## incomehigh:Zero                    -0.8103450  0.6485872  -1.2494 0.2115187    
+## densityLow:Insuff.                 -0.0277451  0.0773471  -0.3587 0.7198128    
+## densityLow:Zero                    -0.2121704  0.1339624  -1.5838 0.1132381    
+## densityMedium:Insuff.               0.0417462  0.1388995   0.3005 0.7637581    
+## densityMedium:Zero                  0.5286740  0.1868949   2.8287 0.0046734 ** 
+## URBAN_transformedurban:Insuff.      0.4683106  0.0809519   5.7850 7.249e-09 ***
+## URBAN_transformedurban:Zero         0.6275634  0.1669141   3.7598 0.0001701 ***
+## HH_RACE_transformedwhite:Insuff.   -0.1002347  0.0865234  -1.1585 0.2466725    
+## HH_RACE_transformedwhite:Zero      -0.5976660  0.1250256  -4.7803 1.750e-06 ***
+## CNTTDHH:Insuff.                     0.0123327  0.0060052   2.0537 0.0400096 *  
+## CNTTDHH:Zero                       -0.0168737  0.0144216  -1.1700 0.2419892    
+## CONDNIGHTRUE:Insuff.               -0.1117210  0.0729631  -1.5312 0.1257204    
+## CONDNIGHTRUE:Zero                  -1.1429978  0.1554510  -7.3528 1.941e-13 ***
+## CONDPUBTRUE:Insuff.                 0.3611441  0.1580223   2.2854 0.0222894 *  
+## CONDPUBTRUE:Zero                    0.8537292  0.1633906   5.2251 1.741e-07 ***
+## CONDRIDETRUE:Insuff.               -0.2487314  0.0759480  -3.2750 0.0010565 ** 
+## CONDRIDETRUE:Zero                   0.9441004  0.1179023   8.0075 1.110e-15 ***
+## CONDRIVETRUE:Insuff.               -0.4177726  0.1112884  -3.7540 0.0001741 ***
+## CONDRIVETRUE:Zero                   0.5162857  0.1312441   3.9338 8.362e-05 ***
+## CONDSPECTRUE:Insuff.               -0.3642978  0.2160525  -1.6862 0.0917661 .  
+## CONDSPECTRUE:Zero                   0.4967109  0.1639330   3.0300 0.0024458 ** 
+## CONDTAXTRUE:Insuff.                -0.1642017  0.3394078  -0.4838 0.6285357    
+## CONDTAXTRUE:Zero                    0.8206421  0.2603653   3.1519 0.0016222 ** 
+## CONDTRAVTRUE:Insuff.                0.1436028  0.0663678   2.1637 0.0304842 *  
+## CONDTRAVTRUE:Zero                  -0.2944897  0.1212208  -2.4294 0.0151253 *  
+## BUS_transformedregularly:Insuff.    0.5215804  0.1553875   3.3566 0.0007889 ***
+## BUS_transformedregularly:Zero       1.3853517  0.1756467   7.8872 3.109e-15 ***
+## CAR_transformedregularly:Insuff.   -0.0320920  0.2867695  -0.1119 0.9108958    
+## CAR_transformedregularly:Zero      -3.0181448  0.1581379 -19.0855 &lt; 2.2e-16 ***
+## TAXI_transformedregularly:Insuff.  -0.4880370  0.1632592  -2.9893 0.0027958 ** 
+## TAXI_transformedregularly:Zero      0.6936025  0.1702400   4.0743 4.616e-05 ***
+## TRAIN_transformedregularly:Insuff. -0.0173478  0.1805795  -0.0961 0.9234670    
+## TRAIN_transformedregularly:Zero    -0.4430133  0.1987085  -2.2295 0.0257830 *  
+## WALK_transformedregularly:Insuff.   0.1069320  0.0675564   1.5829 0.1134545    
+## WALK_transformedregularly:Zero      0.4909410  0.1439793   3.4098 0.0006501 ***
+## ---
+## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
+## 
+## Log-Likelihood: -5006.2
+## McFadden R^2:  0.42901 
+## Likelihood ratio test : chisq = 7522.6 (p.value = &lt; 2.22e-16)</code></pre>
+</div>
+<div id="model-evaluation" class="section level3">
+<h3>Model evaluation</h3>
+<pre class="r"><code>predicts_test &lt;- predict(model_veh, veh_dfidx_test) |&gt;
+  as.data.frame() |&gt;
+  rownames_to_column(&quot;HOUSEID&quot;) |&gt;
+  mutate(HOUSEID = as.numeric(HOUSEID)) |&gt;
+  left_join(hh_data_test)
+
+# Designate the alternative with the highest predictive probability as the most likely choice 
+predicts_test &lt;- predicts_test |&gt;
+  mutate(most_likely = case_when((Suff. &gt; Insuff.) &amp; (Suff. &gt; Zero) ~ &quot;Suff.&quot;,
+                                 (Zero &gt; Insuff.) &amp; (Zero &gt; Suff.) ~ &quot;Zero&quot;,
+                                 TRUE ~ &quot;Insuff.&quot;)) 
+
+# Convert the most_likely and veh_avail variables to factors 
+predicts_test &lt;- predicts_test |&gt;
+  mutate(most_likely = factor(most_likely, 
+                              levels = c(&quot;Suff.&quot;, &quot;Insuff.&quot;, &quot;Zero&quot;))) |&gt;
+  mutate(veh_avail = factor(veh_avail,
+                            levels = c(&quot;Suff.&quot;, &quot;Insuff.&quot;, &quot;Zero&quot;))) |&gt;
+  mutate(correct = veh_avail == most_likely)
+
+# Calculate a confusion matrix to generate accuracy and reliability statistics 
+confusionMatrix(data = predicts_test$most_likely,
+                reference = predicts_test$veh_avail)</code></pre>
+<pre><code>## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction Suff. Insuff.  Zero
+##    Suff.   10861    1200   283
+##    Insuff.    96      60     1
+##    Zero      166       1  1111
+## 
+## Overall Statistics
+##                                           
+##                Accuracy : 0.8732          
+##                  95% CI : (0.8675, 0.8787)
+##     No Information Rate : 0.8072          
+##     P-Value [Acc &gt; NIR] : &lt; 2.2e-16       
+##                                           
+##                   Kappa : 0.5241          
+##                                           
+##  Mcnemar&#39;s Test P-Value : &lt; 2.2e-16       
+## 
+## Statistics by Class:
+## 
+##                      Class: Suff. Class: Insuff. Class: Zero
+## Sensitivity                0.9764       0.047581     0.79642
+## Specificity                0.4416       0.992251     0.98651
+## Pos Pred Value             0.8799       0.382166     0.86933
+## Neg Pred Value             0.8174       0.911834     0.97728
+## Prevalence                 0.8072       0.091516     0.10124
+## Detection Rate             0.7882       0.004354     0.08063
+## Detection Prevalence       0.8959       0.011394     0.09275
+## Balanced Accuracy          0.7090       0.519916     0.89147</code></pre>
+</div>
 </div>
 
 

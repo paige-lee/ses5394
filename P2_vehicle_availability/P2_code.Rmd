@@ -18,6 +18,7 @@ library(knitr)
 library(caret)
 library(dplyr)
 library(dfidx)
+library(MASS)
 
 # Loading mlogit helper functions
 source(here::here("P2_vehicle_availability/mlogit_helpers.R"))
@@ -39,10 +40,10 @@ person_data <- here("P2_vehicle_availability", "data", "perpub.csv") |> read_csv
 
 ```{r}
 # Select desired variables from the household data
-hh_data <- hh_data |> select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID)
+hh_data <- hh_data |> dplyr::select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID)
 
 # Select desired variables from the person data
-person_data <- person_data |> select(HOUSEID, R_AGE, WORKER, DRIVER)
+person_data <- person_data |> dplyr::select(HOUSEID, R_AGE, WORKER, DRIVER)
 ```
 
 ### Mutating and constructing variables
@@ -151,7 +152,7 @@ hh_data <- hh_data |>
 ### Dropping variables we won't be using
 
 ```{r}
-hh_data <- hh_data |> select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density)
+hh_data <- hh_data |> dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density)
 ```
 
 ### Splitting data into training and testing
@@ -273,5 +274,418 @@ Definitions
 
 Can we estimate a vehicle availability model that performs better than this one? 
 
+Data dictionary: https://nhts.ornl.gov/tables09/CodebookBrowser.aspx
 
+Description of the steps I took to get to my final model
+
+* Variables used in the current model: WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density
+* Model 1
+  - Variables I added: TRAVDAY (travel day of the week), URBAN (household's urban area classification), HH_RACE (race of household respondent), WEBUSE17 (frequency of internet use)
+  - The model's performance metrics didn't improve much, especially considering many more predictors were added due to the additional categorical variables with multiple levels.
+* Model 2
+  - Drop WEBUSE17 since none of the predictors were significant
+  - Transform TRAVDAY to just have two levels: weekday or weekend
+    + Sunday is coded as 01, and Saturday is coded as 07
+* Model 3
+  - Transform the HH_RACE variable into "white" or "non-white" since whites make up the vast majority of observations. Drop "refused" and "don't know" observations (missing). 
+* Model 4
+  - Transform URBAN into "urban" for 01, 02, 03 and "non-urban" for 04
+  - 01 is urban area, 02 is urban cluster, and 03 is surrounding urban
+  - 04 is not urban
+  - Goal is to reduce the number of predictors especially since only urban04 is significant, but urban 01-03 are not
+* Model 5
+  - Remove TRAVDAY_transformed from the model $\rightarrow$ model worsens a bit $\rightarrow$ add TRAVDAY_transformed back
+* Model 6
+  - Add EDUC to the model, dropping missing values 
+  - EDUC is from the person-level data, so we must join it with the household level data
+  - Select the highest education level in each household and assign that as the household's education level since EDUC is an ordinal variable
+* Model 7
+  - Adding education was good, but we want to reduce the number of predictors since not all were significant
+  - After taking the maximum education level of a household, convert it to low or high education (categorical)
+  - Group 01, 02, and 03 together $\rightarrow$ less than high schoo, high school, and some college or associates degree $\rightarrow$ low_educ
+  - Group 04 and 04 together $\rightarrow$ bachelor's degree, graduate or professional degree $\rightarrow$ high_educ
+* Model 8
+  - Add CNTTDHH to the model $\rightarrow$ count of household trips on travel day (numeric)
+* Model 9
+  - Add the medical condition variables $\rightarrow$ CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONTAX, CONTRAV
+  - These are person-level variables $\rightarrow$ merge by household, and take the lowest value (yes is coded as 01, no is coded as 02), and drop NAs
+  - This addition lowered the accuracy and sensitivity, but it increased the specificity
+* Model 10
+  - Add bike, bus, car, rail, taxi, train, walk (all household variables)
+  - Convert 1, 2, 3 to "regularly" and 4, 5 to "not_regularly"
+  - Drop NAs (coded as negative values)
+  - Removed RAIL_transformed since all values got converted to "regularly"
+  - This addition increased the specificity even more
+* Model 11
+  - Add HOMEOWN and HH_HISP
+  - Convert HH_HISP to binary and remove NAs
+  - Drop NAs from HOMEOWN 
+* Model 12
+  - Now that we've included many variables, it's time to use stepwise methods for variable selection
+
+### Performing variable selection, data cleaning, and feature engineering again
+
+```{r, message = FALSE, warning = FALSE}
+# Loading household-level data from the 2017 National Household Travel Survey (NHTS)
+hh_data <- here("P2_vehicle_availability", "data", "hhpub.csv") |> read_csv(show_col_types = FALSE)
+
+# Loading person-level data
+person_data <- here("P2_vehicle_availability", "data", "perpub.csv") |> read_csv(show_col_types = FALSE)
+
+# Selecting desired variables from the NHTS data
+hh_data <- hh_data |> dplyr::select(WRKCOUNT,DRVRCNT, HHVEHCNT, HHSIZE, NUMADLT, HHFAMINC, HBPPOPDN, HOUSEID, TRAVDAY, URBAN, HH_RACE, CNTTDHH, BIKE, BUS, CAR, RAIL, TAXI, TRAIN, WALK, HOMEOWN, HH_HISP)
+
+# Select desired variables from the person data
+person_data <- person_data |> dplyr::select(HOUSEID, R_AGE, WORKER, DRIVER, EDUC, CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONDTAX, CONDTRAV)
+
+# Categorical outcome variable
+hh_data <- hh_data |>
+  mutate(veh_avail = case_when(HHVEHCNT == 0 ~ "Zero",
+                               DRVRCNT > HHVEHCNT ~ "Insuff.",
+                               TRUE ~ "Suff."))
+
+# Number of children
+hh_data <- hh_data |>
+  mutate(n_child = HHSIZE - NUMADLT)
+
+# Number of seniors
+n_seniors <- person_data |>
+  mutate(is_senior = R_AGE > 64) |>
+  group_by(HOUSEID) |>
+  summarise(n_seniors = sum(is_senior))
+
+hh_data <- hh_data |>
+  left_join(n_seniors)
+
+# Presence of a 3rd driver
+hh_data <- hh_data |>
+  mutate(three_drivers = DRVRCNT > 2)
+
+# Number of drivers beyond two
+hh_data <- hh_data |>
+  mutate(n_extra_drivers = ifelse(three_drivers, DRVRCNT - 2, 0))
+
+# Income
+# NOTE: missing values (coded as negative) are dropped!
+hh_data <- hh_data |>
+  mutate(HHFAMINC = as.numeric(HHFAMINC)) |>
+  filter(HHFAMINC > 0) |>
+  mutate(income = case_when(HHFAMINC < 4 ~ "low",
+                             HHFAMINC < 5 & HHSIZE > 1 ~ "low",
+                             HHFAMINC < 6 & HHSIZE > 3 ~ "low",
+                             HHFAMINC < 7 & HHSIZE > 5 ~ "low",
+                             HHFAMINC < 8 & HHSIZE > 7 ~ "low",
+                             HHFAMINC > 8 ~ "high",
+                            TRUE ~ "medium")) |>
+    mutate(income = factor(income, levels = c("medium", "low", "high")))
+
+# Non-worker driver
+non_work_driver <- person_data |>
+  mutate(non_work_driver = WORKER == "02" & DRIVER == "01") |>
+  group_by(HOUSEID) |>
+  summarise(non_work_driver = max(non_work_driver))
+
+hh_data <- hh_data |>
+  left_join(non_work_driver)
+
+# Density
+hh_data <- hh_data |>
+  filter(HBPPOPDN > 0) |>
+  mutate(density = case_when(HBPPOPDN < 7000 ~ "Low",
+                             HBPPOPDN < 10000 ~ "High",
+                             TRUE ~ "Medium"))
+
+# Travel day transformed
+hh_data$TRAVDAY_transformed <- ifelse(as.numeric(hh_data$TRAVDAY) %in% c(1, 7), "weekend", "weekday")
+
+# Race transformed
+# Drop the missing values (negative values)
+hh_data <- hh_data |> 
+  mutate(HH_RACE = as.numeric(HH_RACE)) |> 
+  filter(HH_RACE > 0) |>  
+  mutate(HH_RACE_transformed = case_when(
+    HH_RACE == 1 ~ "white",
+    HH_RACE > 1 ~ "non-white"
+  ))
+
+# Urban transformed
+hh_data <- hh_data |>
+  mutate(URBAN = as.numeric(URBAN)) |>
+  mutate(URBAN_transformed = case_when(
+    URBAN < 4 ~ "urban",
+    URBAN == 4 ~ "non-urban"
+  ))
+
+# Educ transformed, filtered out NAs
+# First take the max education of each household, then assign low or high educ labels
+EDUC_transformed <- person_data |> 
+  mutate(EDUC = as.numeric(EDUC)) |> 
+  filter(EDUC > 0) |> 
+  group_by(HOUSEID) |> 
+  summarise(EDUC_transformed = case_when(
+    max(EDUC, na.rm = TRUE) <= 3 ~ "low_educ",
+    max(EDUC, na.rm = TRUE) > 3 ~ "high_educ"
+  ), .groups = "drop")
+
+hh_data <- hh_data |>
+  left_join(EDUC_transformed, by = "HOUSEID")
+
+# Convert CNTTDHH to numeric
+hh_data$CNTTDHH <- as.numeric(hh_data$CNTTDHH)
+
+# CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONDTAX, CONDTRAV
+# Join person-level data with household-level data and drop NAs
+CONDNIGH <- person_data |>
+  mutate(CONDNIGH = as.numeric(CONDNIGH)) |>
+  filter(CONDNIGH > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDNIGH = as.logical(if_else(max(CONDNIGH, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDNIGH, by = "HOUSEID") 
+
+CONDPUB <- person_data |>
+  mutate(CONDPUB = as.numeric(CONDPUB)) |>
+  filter(CONDPUB > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDPUB = as.logical(if_else(max(CONDPUB, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDPUB, by = "HOUSEID")
+
+CONDRIDE <- person_data |>
+  mutate(CONDRIDE = as.numeric(CONDRIDE)) |>
+  filter(CONDRIDE > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDRIDE = as.logical(if_else(max(CONDRIDE, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDRIDE, by = "HOUSEID")
+
+CONDRIVE <- person_data |>
+  mutate(CONDRIVE = as.numeric(CONDRIVE)) |>
+  filter(CONDRIVE > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDRIVE = as.logical(if_else(max(CONDRIVE, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDRIVE, by = "HOUSEID")
+
+CONDSPEC <- person_data |>
+  mutate(CONDSPEC = as.numeric(CONDSPEC)) |>
+  filter(CONDSPEC > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDSPEC = as.logical(if_else(max(CONDSPEC, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDSPEC, by = "HOUSEID")
+
+CONDTAX <- person_data |>
+  mutate(CONDTAX = as.numeric(CONDTAX)) |>
+  filter(CONDTAX > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDTAX = as.logical(if_else(max(CONDTAX, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDTAX, by = "HOUSEID")
+
+CONDTRAV <- person_data |>
+  mutate(CONDTRAV = as.numeric(CONDTRAV)) |>
+  filter(CONDTRAV > 0) |>
+  group_by(HOUSEID) |>
+  summarise(CONDTRAV = as.logical(if_else(max(CONDTRAV, na.rm = TRUE) == 2, 0, 1)), .groups = "drop")
+hh_data <- hh_data |>
+  left_join(CONDTRAV, by = "HOUSEID")
+
+# Transforming BIKE, BUS, CAR, RAIL, TAXI, TRAIN, WALK
+hh_data <- hh_data |>
+  mutate(BIKE = as.numeric(BIKE)) |>
+  mutate(BIKE_transformed = case_when(
+    BIKE < 4 ~ "regularly",
+    BIKE >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+hh_data <- hh_data |>
+  mutate(BUS = as.numeric(BUS)) |>
+  mutate(BUS_transformed = case_when(
+    BUS < 4 ~ "regularly",
+    BUS >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+hh_data <- hh_data |>
+  mutate(CAR = as.numeric(CAR)) |>
+  mutate(CAR_transformed = case_when(
+    CAR < 4 ~ "regularly",
+    CAR >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+hh_data <- hh_data |>
+  mutate(RAIL = as.numeric(RAIL)) |>
+  mutate(RAIL_transformed = case_when(
+    RAIL < 4 ~ "regularly",
+    RAIL >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+hh_data <- hh_data |>
+  mutate(TAXI = as.numeric(TAXI)) |>
+  mutate(TAXI_transformed = case_when(
+    TAXI < 4 ~ "regularly",
+    TAXI >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+hh_data <- hh_data |>
+  mutate(TRAIN = as.numeric(TRAIN)) |>
+  mutate(TRAIN_transformed = case_when(
+    TRAIN < 4 ~ "regularly",
+    TRAIN >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+hh_data <- hh_data |>
+  mutate(WALK = as.numeric(WALK)) |>
+  mutate(WALK_transformed = case_when(
+    WALK < 4 ~ "regularly",
+    WALK >=4 ~ "non_regularly"
+  ) |> as.factor())
+
+# HOMEOWN drop NAs
+hh_data <- hh_data |>
+  mutate(HOMEOWN = as.numeric(HOMEOWN)) |>
+  filter(HOMEOWN > 0)
+
+# HH_HISP drop NAs and convert to binary
+hh_data <- hh_data |>
+  mutate(HH_HISP = as.numeric(HH_HISP)) |>
+  filter(HH_HISP > 0) |>
+  mutate(HH_HISP = as.logical(if_else(HH_HISP == 2, 0, 1)))
+
+# Selecting the variables we want
+hh_data <- hh_data |> dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_seniors, n_extra_drivers, three_drivers, non_work_driver, income, density, TRAVDAY_transformed, URBAN_transformed, HH_RACE_transformed, EDUC_transformed, CNTTDHH, CONDNIGH, CONDPUB, CONDRIDE, CONDRIVE, CONDSPEC, CONDTAX, CONDTRAV, BIKE_transformed, BUS_transformed, CAR_transformed, RAIL_transformed, TAXI_transformed, TRAIN_transformed, WALK_transformed, HOMEOWN, HH_HISP)
+
+# Convert categorical variables to factors
+hh_data$veh_avail <- factor(hh_data$veh_avail)
+hh_data$density <- factor(hh_data$density)
+hh_data$TRAVDAY_transformed <- factor(hh_data$TRAVDAY_transformed)
+hh_data$URBAN_transformed <- factor(hh_data$URBAN_transformed)
+hh_data$HH_RACE_transformed <- factor(hh_data$HH_RACE_transformed)
+hh_data$EDUC_transformed <- factor(hh_data$EDUC_transformed)
+```
+
+### Train test split and convert to dfidx format
+
+```{r}
+set.seed(1)
+
+# Take a random sample of 50% of the IDs in the data
+hh_data_train_ids <- sample(hh_data$HOUSEID, 
+                        size = ceiling(nrow(hh_data)/2))
+
+# Assign these IDs to constitute the training set
+hh_data_train <- hh_data |>
+  filter(HOUSEID %in% hh_data_train_ids)
+
+# Assign the remaining unused IDs to constitute the testing set
+hh_data_test <- hh_data |> 
+  filter(!(HOUSEID %in% hh_data_train_ids))
+
+# Create the dfidx datasets
+veh_dfidx_train <- fn_make_dfidx(hh_data_train,
+                                "HOUSEID",
+                                "veh_avail")
+
+veh_dfidx_test <- fn_make_dfidx(hh_data_test,
+                                "HOUSEID",
+                                "veh_avail")
+```
+
+### Modeling
+
+```{r, eval = FALSE}
+# Full model, eval = FALSE (before stepwise variable selection)
+model_veh <- mlogit(choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density + TRAVDAY_transformed + URBAN_transformed + HH_RACE_transformed + EDUC_transformed + CNTTDHH + CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + CONDTRAV + BIKE_transformed + BUS_transformed + CAR_transformed + TAXI_transformed + TRAIN_transformed + WALK_transformed + HOMEOWN + HH_HISP | 0, veh_dfidx_train, reflevel = "Suff.")
+
+summary(model_veh)
+```
+
+### Stepwise variable selection
+
+```{r, message = FALSE, eval = FALSE}
+# Set to eval = FALSE because I don't need to perform stepwise variable selection everytime; just once to find the best subset of predictors
+# Define a stepwise variable selection function for mlogit since it's not compatible with the built in AIC functions
+# This function is from ChatGPT
+stepwise_mlogit <- function(data, full_formula) {
+  # Fit the full model
+  current_model <- mlogit(full_formula, data, reflevel = "Suff.")
+  best_aic <- AIC(current_model)
+  
+  # Extract predictor variable names
+  predictors <- all.vars(update(full_formula, . ~ . - 0))[!all.vars(update(full_formula, . ~ . - 0)) %in% c("choice")]
+
+  total_vars <- length(predictors)  # Count total variables
+  step <- 1  # Track step number
+  
+  for (var in predictors) {
+    new_predictors <- setdiff(predictors, var)  # Remove one variable
+    new_formula <- as.formula(paste("choice ~ 0 |", paste(new_predictors, collapse = " + "), "| 0"))
+    
+    message(paste("Step", step, "of", total_vars, "- Removing:", var))
+    
+    # Fit new model
+    new_model <- mlogit(new_formula, data, reflevel = "Suff.")
+    new_aic <- AIC(new_model)
+    
+    # Keep the model if it improves AIC
+    if (new_aic < best_aic) {
+      best_aic <- new_aic
+      current_model <- new_model
+      predictors <- new_predictors  # Update remaining variables
+    }
+    
+    step <- step + 1  # Increment step count
+  }
+  
+  message("Stepwise selection complete. Best AIC:", best_aic)
+  return(current_model)
+}
+
+# Define the full model formula
+full_formula <- choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density + TRAVDAY_transformed + URBAN_transformed + HH_RACE_transformed + EDUC_transformed + CNTTDHH + CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + CONDTRAV + BIKE_transformed + BUS_transformed + CAR_transformed + TAXI_transformed + TRAIN_transformed + WALK_transformed | 0
+
+# Run stepwise selection
+best_model <- stepwise_mlogit(veh_dfidx_train, full_formula)
+
+# View the final selected model
+summary(best_model)
+```
+
+```{r}
+# Final model after stepwise variable selection
+model_veh <- mlogit(choice ~ 0 | WRKCOUNT + n_child + n_seniors + n_extra_drivers + three_drivers + non_work_driver + income + density + URBAN_transformed + HH_RACE_transformed + CNTTDHH + CONDNIGH + CONDPUB + CONDRIDE + CONDRIVE + CONDSPEC + CONDTAX + CONDTRAV + BUS_transformed + CAR_transformed + TAXI_transformed + TRAIN_transformed + WALK_transformed | 0, veh_dfidx_train, reflevel = "Suff.")
+
+summary(model_veh)
+```
+
+### Model evaluation
+
+```{r, message = FALSE, warning = FALSE}
+predicts_test <- predict(model_veh, veh_dfidx_test) |>
+  as.data.frame() |>
+  rownames_to_column("HOUSEID") |>
+  mutate(HOUSEID = as.numeric(HOUSEID)) |>
+  left_join(hh_data_test)
+
+# Designate the alternative with the highest predictive probability as the most likely choice 
+predicts_test <- predicts_test |>
+  mutate(most_likely = case_when((Suff. > Insuff.) & (Suff. > Zero) ~ "Suff.",
+                                 (Zero > Insuff.) & (Zero > Suff.) ~ "Zero",
+                                 TRUE ~ "Insuff.")) 
+
+# Convert the most_likely and veh_avail variables to factors 
+predicts_test <- predicts_test |>
+  mutate(most_likely = factor(most_likely, 
+                              levels = c("Suff.", "Insuff.", "Zero"))) |>
+  mutate(veh_avail = factor(veh_avail,
+                            levels = c("Suff.", "Insuff.", "Zero"))) |>
+  mutate(correct = veh_avail == most_likely)
+
+# Calculate a confusion matrix to generate accuracy and reliability statistics 
+confusionMatrix(data = predicts_test$most_likely,
+                reference = predicts_test$veh_avail)
+```
+
+
+  
 

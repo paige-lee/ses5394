@@ -35,7 +35,7 @@ fn_make_dfidx <- function(my_situation,
     relocate(choice) |>
     relocate(avail_choice) |>
     relocate(id) |>
-    select(-alternatives) 
+    dplyr::select(-alternatives) 
   
   dfidx(rep_trips, drop.index = FALSE)
 }
