@@ -197,6 +197,13 @@ veh_dfidx_test$income <- factor(veh_dfidx_test$income)
 
 veh_dfidx_train$density <- factor(veh_dfidx_train$density)
 veh_dfidx_test$density <- factor(veh_dfidx_test$density)
+
+# Convert the appropriate binary variables to binary
+veh_dfidx_train$three_drivers <- as.logical(veh_dfidx_train$three_drivers)
+veh_dfidx_test$three_drivers <- as.logical(veh_dfidx_test$three_drivers)
+
+veh_dfidx_train$non_work_driver <- as.logical(veh_dfidx_train$non_work_driver)
+veh_dfidx_test$non_work_driver <- as.logical(veh_dfidx_test$non_work_driver)
 ```
 
 # 3. Modeling
@@ -558,10 +565,15 @@ hh_data <- hh_data |> dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child, n_sen
 # Convert categorical variables to factors
 hh_data$veh_avail <- factor(hh_data$veh_avail)
 hh_data$density <- factor(hh_data$density)
+hh_data$income <- factor(hh_data$income)
 hh_data$TRAVDAY_transformed <- factor(hh_data$TRAVDAY_transformed)
 hh_data$URBAN_transformed <- factor(hh_data$URBAN_transformed)
 hh_data$HH_RACE_transformed <- factor(hh_data$HH_RACE_transformed)
 hh_data$EDUC_transformed <- factor(hh_data$EDUC_transformed)
+
+# Convert the appropriate binary variables to binary
+hh_data$three_drivers <- as.logical(hh_data$three_drivers)
+hh_data$non_work_driver <- as.logical(hh_data$non_work_driver)
 ```
 
 ### Train test split and convert to dfidx format

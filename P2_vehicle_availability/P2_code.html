@@ -519,7 +519,14 @@ veh_dfidx_train$income &lt;- factor(veh_dfidx_train$income)
 veh_dfidx_test$income &lt;- factor(veh_dfidx_test$income)
 
 veh_dfidx_train$density &lt;- factor(veh_dfidx_train$density)
-veh_dfidx_test$density &lt;- factor(veh_dfidx_test$density)</code></pre>
+veh_dfidx_test$density &lt;- factor(veh_dfidx_test$density)
+
+# Convert the appropriate binary variables to binary
+veh_dfidx_train$three_drivers &lt;- as.logical(veh_dfidx_train$three_drivers)
+veh_dfidx_test$three_drivers &lt;- as.logical(veh_dfidx_test$three_drivers)
+
+veh_dfidx_train$non_work_driver &lt;- as.logical(veh_dfidx_train$non_work_driver)
+veh_dfidx_test$non_work_driver &lt;- as.logical(veh_dfidx_test$non_work_driver)</code></pre>
 </div>
 </div>
 <div id="modeling" class="section level1">
@@ -540,34 +547,34 @@ summary(model_veh)</code></pre>
 ## 0.883323 0.068361 0.048316 
 ## 
 ## nr method
-## 9 iterations, 0h:0m:5s 
+## 9 iterations, 0h:0m:4s 
 ## g&#39;(-H)^-1g = 0.000126 
 ## successive function values within tolerance limits 
 ## 
 ## Coefficients :
-##                            Estimate Std. Error  z-value  Pr(&gt;|z|)    
-## (Intercept):Insuff.       -4.287954   0.072690 -58.9899 &lt; 2.2e-16 ***
-## (Intercept):Zero           0.179721   0.088389   2.0333 0.0420221 *  
-## WRKCOUNT:Insuff.           0.423791   0.031699  13.3694 &lt; 2.2e-16 ***
-## WRKCOUNT:Zero             -3.162741   0.067690 -46.7238 &lt; 2.2e-16 ***
-## n_child:Insuff.            0.211287   0.018114  11.6642 &lt; 2.2e-16 ***
-## n_child:Zero              -0.155181   0.042966  -3.6117 0.0003042 ***
-## n_seniors:Insuff.          0.340944   0.024345  14.0046 &lt; 2.2e-16 ***
-## n_seniors:Zero            -0.513402   0.047115 -10.8967 &lt; 2.2e-16 ***
-## n_extra_drivers:Insuff.    0.241909   0.059482   4.0669 4.764e-05 ***
-## n_extra_drivers:Zero       0.462414   0.441284   1.0479 0.2946923    
-## three_driversTRUE:Insuff.  0.746038   0.084065   8.8745 &lt; 2.2e-16 ***
-## three_driversTRUE:Zero     0.433414   0.596741   0.7263 0.4676533    
-## non_work_driver:Insuff.    1.234070   0.055258  22.3329 &lt; 2.2e-16 ***
-## non_work_driver:Zero      -4.185006   0.072671 -57.5886 &lt; 2.2e-16 ***
-## incomelow:Insuff.          0.574217   0.037487  15.3176 &lt; 2.2e-16 ***
-## incomelow:Zero             1.949541   0.057127  34.1266 &lt; 2.2e-16 ***
-## incomehigh:Insuff.        -0.351304   0.050216  -6.9958 2.637e-12 ***
-## incomehigh:Zero            0.130857   0.117096   1.1175 0.2637735    
-## densityLow:Insuff.        -0.310028   0.039573  -7.8344 4.663e-15 ***
-## densityLow:Zero           -0.477784   0.059697  -8.0035 1.110e-15 ***
-## densityMedium:Insuff.      0.834553   0.059858  13.9423 &lt; 2.2e-16 ***
-## densityMedium:Zero         1.549666   0.070877  21.8643 &lt; 2.2e-16 ***
+##                              Estimate Std. Error  z-value  Pr(&gt;|z|)    
+## (Intercept):Insuff.         -4.287954   0.072690 -58.9899 &lt; 2.2e-16 ***
+## (Intercept):Zero             0.179721   0.088389   2.0333 0.0420221 *  
+## WRKCOUNT:Insuff.             0.423791   0.031699  13.3694 &lt; 2.2e-16 ***
+## WRKCOUNT:Zero               -3.162741   0.067690 -46.7238 &lt; 2.2e-16 ***
+## n_child:Insuff.              0.211287   0.018114  11.6642 &lt; 2.2e-16 ***
+## n_child:Zero                -0.155181   0.042966  -3.6117 0.0003042 ***
+## n_seniors:Insuff.            0.340944   0.024345  14.0046 &lt; 2.2e-16 ***
+## n_seniors:Zero              -0.513402   0.047115 -10.8967 &lt; 2.2e-16 ***
+## n_extra_drivers:Insuff.      0.241909   0.059482   4.0669 4.764e-05 ***
+## n_extra_drivers:Zero         0.462414   0.441284   1.0479 0.2946923    
+## three_driversTRUE:Insuff.    0.746038   0.084065   8.8745 &lt; 2.2e-16 ***
+## three_driversTRUE:Zero       0.433414   0.596741   0.7263 0.4676533    
+## non_work_driverTRUE:Insuff.  1.234070   0.055258  22.3329 &lt; 2.2e-16 ***
+## non_work_driverTRUE:Zero    -4.185006   0.072671 -57.5886 &lt; 2.2e-16 ***
+## incomelow:Insuff.            0.574217   0.037487  15.3176 &lt; 2.2e-16 ***
+## incomelow:Zero               1.949541   0.057127  34.1266 &lt; 2.2e-16 ***
+## incomehigh:Insuff.          -0.351304   0.050216  -6.9958 2.637e-12 ***
+## incomehigh:Zero              0.130857   0.117096   1.1175 0.2637735    
+## densityLow:Insuff.          -0.310028   0.039573  -7.8344 4.663e-15 ***
+## densityLow:Zero             -0.477784   0.059697  -8.0035 1.110e-15 ***
+## densityMedium:Insuff.        0.834553   0.059858  13.9423 &lt; 2.2e-16 ***
+## densityMedium:Zero           1.549666   0.070877  21.8643 &lt; 2.2e-16 ***
 ## ---
 ## Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1
 ## 
@@ -1163,10 +1170,15 @@ hh_data &lt;- hh_data |&gt; dplyr::select(HOUSEID, veh_avail, WRKCOUNT, n_child,
 # Convert categorical variables to factors
 hh_data$veh_avail &lt;- factor(hh_data$veh_avail)
 hh_data$density &lt;- factor(hh_data$density)
+hh_data$income &lt;- factor(hh_data$income)
 hh_data$TRAVDAY_transformed &lt;- factor(hh_data$TRAVDAY_transformed)
 hh_data$URBAN_transformed &lt;- factor(hh_data$URBAN_transformed)
 hh_data$HH_RACE_transformed &lt;- factor(hh_data$HH_RACE_transformed)
-hh_data$EDUC_transformed &lt;- factor(hh_data$EDUC_transformed)</code></pre>
+hh_data$EDUC_transformed &lt;- factor(hh_data$EDUC_transformed)
+
+# Convert the appropriate binary variables to binary
+hh_data$three_drivers &lt;- as.logical(hh_data$three_drivers)
+hh_data$non_work_driver &lt;- as.logical(hh_data$non_work_driver)</code></pre>
 </div>
 <div id="train-test-split-and-convert-to-dfidx-format" class="section level3">
 <h3>Train test split and convert to dfidx format</h3>
@@ -1285,8 +1297,8 @@ summary(model_veh)</code></pre>
 ## n_extra_drivers:Zero                2.0561934  0.6527013   3.1503 0.0016311 ** 
 ## three_driversTRUE:Insuff.           0.9564769  0.1720882   5.5581 2.728e-08 ***
 ## three_driversTRUE:Zero             -1.7006101  1.0768996  -1.5792 0.1142965    
-## non_work_driver:Insuff.             1.2486129  0.1450438   8.6085 &lt; 2.2e-16 ***
-## non_work_driver:Zero               -3.5327716  0.1461093 -24.1790 &lt; 2.2e-16 ***
+## non_work_driverTRUE:Insuff.         1.2486129  0.1450438   8.6085 &lt; 2.2e-16 ***
+## non_work_driverTRUE:Zero           -3.5327716  0.1461093 -24.1790 &lt; 2.2e-16 ***
 ## incomelow:Insuff.                   0.5325811  0.0659922   8.0704 6.661e-16 ***
 ## incomelow:Zero                      1.3263354  0.1358369   9.7642 &lt; 2.2e-16 ***
 ## incomehigh:Insuff.                 -0.5000855  0.1385884  -3.6084 0.0003081 ***
