@@ -5,10 +5,17 @@ output: html_document
 
 # 1. Setup
 
+### References
+
+Data dictionary: https://nhts.ornl.gov/tables09/CodebookBrowser.aspx
+
+P3 assignment instructions: https://gsd-ses-5394-sp2025.github.io/examples/P3/P3
+
 ### Loading libraries
 
 ```{r, message = FALSE, warning = FALSE}
 library(tidyverse)
+library(dplyr)
 ```
 
 ### Loading data
@@ -37,5 +44,102 @@ table(trip_data$medical_trips_response)
 
 There is a severe class imbalance in the response variable, so we'll need to perform weighted logistic regression later.
 
-TO DO NEXT: merge trip_data with person_data to obtain ages -> create a binary variable for 65+ and another one for <18 -> select/filter to only include the variables we want -> run chatgpt's suggested weighted logistic regression model 
+### Calculating weights for weighted logistic regression
+
+Due to the big class imbalance in the response variable (`trip_data$medical_trips_response`), we need to perform weighted logistic regression since medical trips (what we're focusing on) are very rare in the dataset
+
+```{r}
+trip_data$weights <- ifelse(trip_data$medical_trips_response == 1, 
+                            nrow(trip_data) / (2 * sum(trip_data$medical_trips_response == 1)),  # Weight for medical trips
+                            nrow(trip_data) / (2 * sum(trip_data$medical_trips_response == 0)))  # Weight for non-medical trips
+```
+
+### Creating binary predictors for age groups
+
+Create two binary predictors: 1. whether a person is ≥ 65 years old, 2. whether a person is < 18 years old. 
+
+```{r}
+person_data$is_65_older <- ifelse(person_data$R_AGE >= 65, 1, 0)
+table(person_data$is_65_older)
+```
+
+```{r}
+person_data$is_18_younger <- ifelse(person_data$R_AGE < 18, 1, 0)
+table(person_data$is_18_younger)
+```
+
+### Merge trip data with person data 
+
+```{r}
+# Left join trip data with person data -> keep all records from trip data, find their matches with person data
+# Merge on the unique (HOUSEID, PERSONID) pairs -> merge on two columns
+
+trip_data_merged <- merge(x = trip_data, y = person_data, by = c("HOUSEID", "PERSONID"), all.x = TRUE)  
+```
+
+### Clean the merged data for duplicate columns .x and .y
+
+```{r}
+# Function to check if .x and .y versions are identical
+check_identical_columns <- function(df) {
+  cols_x <- grep(".x$", names(df), value = TRUE)  # Get .x columns
+  cols_y <- sub(".x$", ".y", cols_x)  # Corresponding .y columns
+
+  identical_cols <- c()  # To store columns where .x and .y are identical
+  non_identical_cols <- c()  # To store columns where .x and .y are different
+
+  for (i in seq_along(cols_x)) {
+    col_x <- df[[cols_x[i]]]
+    col_y <- df[[cols_y[i]]]
+
+    # Check if they are identical (ignoring NAs)
+    if (all(col_x == col_y, na.rm = TRUE)) {
+      identical_cols <- c(identical_cols, cols_x[i])  # Store identical ones
+    } else {
+      non_identical_cols <- c(non_identical_cols, cols_x[i])  # Store non-identical ones
+    }
+  }
+
+  list(identical = identical_cols, non_identical = non_identical_cols)
+}
+
+cat("Number of columns in trip_data_merged before cleaning:", ncol(trip_data_merged), "\n")
+
+# Check which columns are identical
+col_check <- check_identical_columns(trip_data_merged)
+
+# Process only if columns are identical
+trip_data_merged <- trip_data_merged %>%
+  # Keep .x version if .x and .y are identical
+  mutate(across(all_of(col_check$identical), ~ coalesce(.x, get(sub(".x$", ".y", cur_column()))))) %>%
+  # Drop the corresponding .y columns
+  select(-all_of(sub(".x$", ".y", col_check$identical))) %>%
+  # Rename .x columns by removing .x suffix
+  rename_with(~ sub(".x$", "", .), all_of(col_check$identical))
+
+# Output non-identical columns for manual review
+if (length(col_check$non_identical) > 0) {
+  cat("Warning: These columns have different .x and .y values and were not merged:\n")
+  print(sub(".x$", "", col_check$non_identical))
+}
+
+cat("Number of columns in trip_data_merged after cleaning:", ncol(trip_data_merged))
+```
+
+# 3. Modeling
+
+### Model 1: weighted logistic regression with quadratic age (no age predictors) 
+
+```{r, message = FALSE, warning = FALSE}
+model1 <- glm(medical_trips_response ~ R_AGE + I(R_AGE^2), 
+                      family = binomial(link = "logit"), 
+                      data = trip_data_merged, 
+                      weights = trip_data_merged$weights)
+
+summary(model1)
+```
+
+
+
+
 
