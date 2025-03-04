@@ -3,3 +3,39 @@ title: "P3_code"
 output: html_document
 ---
 
+# 1. Setup
+
+### Loading libraries
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+```
+
+### Loading data
+
+```{r}
+# Loading household-level data from the 2017 National Household Travel Survey (NHTS)
+hh_data <- read.csv("/Users/paigelee/Documents/SES 5394/ses5394/P2_vehicle_availability/data/hhpub.csv")
+
+# Loading person-level data
+person_data <- read.csv("/Users/paigelee/Documents/SES 5394/ses5394/P2_vehicle_availability/data/perpub.csv")
+
+# Loading trip data
+trip_data <- read.csv("/Users/paigelee/Documents/SES 5394/ses5394/P2_vehicle_availability/data/trippub.csv")
+```
+
+# 2. Feature selection and engineering
+
+### Creating the response variable
+
+Create a binary response variable with values of 1 if the trip destination purpose (WHYTO) was for medical trips, or 0 otherwise.
+
+```{r}
+trip_data$medical_trips_response <- ifelse(trip_data$WHYTO == 18, 1, 0)
+table(trip_data$medical_trips_response)
+```
+
+There is a severe class imbalance in the response variable, so we'll need to perform weighted logistic regression later.
+
+TO DO NEXT: merge trip_data with person_data to obtain ages -> create a binary variable for 65+ and another one for <18 -> select/filter to only include the variables we want -> run chatgpt's suggested weighted logistic regression model 
+
