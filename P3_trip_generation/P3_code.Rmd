@@ -399,7 +399,7 @@ GAM model allows for smooth relationships in variables that we think may be nonl
 
 `s()` allows for some variables to be modeled as nonlinear
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 model4 <- gam(medical_trips_response ~ s(R_AGE) + s(TRVLCMIN) + 
                  s(DWELTIME) + TRPTRANS + HHSIZE + HHFAMINC_new + 
                  WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + 
@@ -413,7 +413,7 @@ model4 <- gam(medical_trips_response ~ s(R_AGE) + s(TRVLCMIN) +
 summary(model4)
 ```
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 # Evaluate the model
 
 # Make predictions
