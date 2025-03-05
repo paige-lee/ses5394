@@ -16,14 +16,15 @@ P3 assignment instructions: https://gsd-ses-5394-sp2025.github.io/examples/P3/P3
 ```{r, message = FALSE, warning = FALSE}
 library(tidyverse)
 library(dplyr)
+library(caret)
+library(pROC)
+library(MASS)
+library(mgcv)
 ```
 
 ### Loading data
 
 ```{r}
-# Loading household-level data from the 2017 National Household Travel Survey (NHTS)
-hh_data <- read.csv("/Users/paigelee/Documents/SES 5394/ses5394/P2_vehicle_availability/data/hhpub.csv")
-
 # Loading person-level data
 person_data <- read.csv("/Users/paigelee/Documents/SES 5394/ses5394/P2_vehicle_availability/data/perpub.csv")
 
@@ -39,6 +40,8 @@ Create a binary response variable with values of 1 if the trip destination purpo
 
 ```{r}
 trip_data$medical_trips_response <- ifelse(trip_data$WHYTO == 18, 1, 0)
+trip_data$medical_trips_response <- as.integer(trip_data$medical_trips_response)
+
 table(trip_data$medical_trips_response)
 ```
 
@@ -113,7 +116,7 @@ trip_data_merged <- trip_data_merged %>%
   # Keep .x version if .x and .y are identical
   mutate(across(all_of(col_check$identical), ~ coalesce(.x, get(sub(".x$", ".y", cur_column()))))) %>%
   # Drop the corresponding .y columns
-  select(-all_of(sub(".x$", ".y", col_check$identical))) %>%
+  dplyr::select(-all_of(sub(".x$", ".y", col_check$identical))) %>%
   # Rename .x columns by removing .x suffix
   rename_with(~ sub(".x$", "", .), all_of(col_check$identical))
 
@@ -126,12 +129,98 @@ if (length(col_check$non_identical) > 0) {
 cat("Number of columns in trip_data_merged after cleaning:", ncol(trip_data_merged))
 ```
 
+### Transforming the household race variable
+
+As shown below, white people make up 83% of the sample $\rightarrow$ we should convert the household race variable into a binary variable (yes white, or not white); I did this on the P2 assignment
+
+```{r}
+# Percentage of each category in the HH_RACE variable
+table(trip_data_merged$HH_RACE) / nrow(trip_data_merged) * 100
+```
+
+```{r}
+# 1 if white, 0 otherwise
+trip_data_merged$HH_RACE_new <- ifelse(trip_data_merged$HH_RACE == 1, 1, 0)
+
+table(trip_data_merged$HH_RACE_new)
+```
+
+### Transforming the household income variable
+
+I used the sample household income categorization that was used in P2 in the code that was given to us
+
+```{r}
+trip_data_merged <- trip_data_merged |>
+  mutate(HHFAMINC = as.numeric(HHFAMINC)) |>
+  filter(HHFAMINC > 0) |>
+  mutate(HHFAMINC_new = case_when(HHFAMINC < 4 ~ "low",
+                             HHFAMINC < 5 & HHSIZE > 1 ~ "low",
+                             HHFAMINC < 6 & HHSIZE > 3 ~ "low",
+                             HHFAMINC < 7 & HHSIZE > 5 ~ "low",
+                             HHFAMINC < 8 & HHSIZE > 7 ~ "low",
+                             HHFAMINC > 8 ~ "high",
+                            TRUE ~ "medium")) |>
+    mutate(HHFAMINC_new = factor(HHFAMINC_new, levels = c("medium", "low", "high")))
+
+table(trip_data_merged$HHFAMINC_new)
+```
+
+### Convert all categorical variables (that we'll use in the model) to factors
+
+```{r}
+categorical_variables <- c("TRPTRANS", "PUBTRANS", "URBRUR", "EDUC", "R_SEX", "PHYACT", "CONDTRAV", "CONDRIDE", "CONDNIGH", "CONDRIVE", "CONDPUB", "CONDSPEC", "CONDTAX", "is_65_older", "is_18_younger", "HH_RACE_new")
+
+# Filter out all observations with negative values (NAs) in the categorical variable columns
+trip_data_merged <- trip_data_merged %>%
+  filter(if_all(all_of(categorical_variables), ~ . >= 0))
+
+# Convert categorical variables to factors
+trip_data_merged[categorical_variables] <- lapply(trip_data_merged[categorical_variables], as.factor)
+```
+
+### Cleaning the medical device variables
+
+We want to convert all positive values to 1 (uses the medical device) and all other values to 0 (doesn't use the medical device)
+
+```{r}
+medical_device_variables <- c("W_CANE", "W_WLKR", "W_WHCANE", "W_DOG", "W_CRUTCH", 
+                         "W_SCOOTR", "W_CHAIR", "W_MTRCHR")
+
+# Convert all positive values to 1, all others to 0
+trip_data_merged <- trip_data_merged %>%
+  mutate(across(all_of(medical_device_variables), ~ ifelse(. > 0, 1, 0))) %>%
+  mutate(across(all_of(medical_device_variables), as.factor))
+```
+
 # 3. Modeling
 
-### Model 1: weighted logistic regression with quadratic age (no age predictors) 
+### Model 1: weighted logistic regression with quadratic age (WITHOUT binary age group predictors) 
 
-```{r, message = FALSE, warning = FALSE}
-model1 <- glm(medical_trips_response ~ R_AGE + I(R_AGE^2), 
+Predictors to add: 
+
+* Trip characteristics
+  - TRVLCMIN: trip duration in minutes
+  - TRPMILES: travel distance in miles
+  - TRPTRANS: transportation mode
+  - PUBTRANS: public transportation used on the trip
+  - DWELTIME: time at the destination
+* Demographic characteristics  
+  - HHSIZE: household size
+  - HHVEHCNT: household vehicle count
+  - HHFAMINC: household income
+  - WRKCOUNT: number of workers in the household
+  - URBRUR: is the household urban or rural?
+  - HH_RACE: household race
+  - EDUC: education of the respondent
+  - R_SEX: sex of the respondent
+  - PHYACT: level of physical activity
+  - Medical devices used: W_CANE, W_WLKR, W_WHCANE, W_DOG, W_CRUTCH, W_SCOOTR, W_CHAIR, W_MTRCHR
+  - Medical condition results in: CONDTRAV, CONDRIDE, CONDNIGH, CONDRIVE, CONDPUB, CONDSPEC, CONDTAX
+  
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Fit the model
+model1 <- glm(medical_trips_response ~ R_AGE + I(R_AGE^2) + TRVLCMIN + TRPMILES + TRPTRANS + DWELTIME + HHSIZE + HHVEHCNT + HHFAMINC_new + WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + PHYACT + W_CANE + W_WLKR + W_WHCANE + W_DOG + W_CRUTCH + W_SCOOTR + W_CHAIR + W_MTRCHR + CONDTRAV + CONDRIDE + CONDNIGH + CONDRIVE + CONDPUB + CONDSPEC + CONDTAX, 
                       family = binomial(link = "logit"), 
                       data = trip_data_merged, 
                       weights = trip_data_merged$weights)
@@ -139,7 +228,215 @@ model1 <- glm(medical_trips_response ~ R_AGE + I(R_AGE^2),
 summary(model1)
 ```
 
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
 
+# Make predictions
+trip_data_merged$predicted_probs <- predict(model1, type = "response")
+
+# Convert to binary predictions using a threshold of 0.5
+trip_data_merged$predicted_class <- ifelse(trip_data_merged$predicted_probs > 0.5, 1, 0)
+
+# Create confusion matrix
+confusionMatrix(as.factor(trip_data_merged$predicted_class), as.factor(trip_data_merged$medical_trips_response))
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# ROC curve
+roc_curve <- roc(trip_data_merged$medical_trips_response, trip_data_merged$predicted_probs)
+
+# Plot the ROC curve
+plot(roc_curve, main = "ROC curve for model 1", col = "blue")
+
+# Compute AUC
+auc(roc_curve)
+```
+
+### Model 2: weighted logistic regression with quadratic age (WITH binary age group predictors) 
+
+Predictors to add: `person_data$is_65_older` and `person_data$is_18_younger`
+  
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Fit the model
+model2 <- glm(medical_trips_response ~ R_AGE + I(R_AGE^2) + TRVLCMIN + TRPMILES + TRPTRANS + DWELTIME + HHSIZE + HHVEHCNT + HHFAMINC_new + WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + R_AGE_IMP + R_SEX_IMP + PHYACT + W_CANE + W_WLKR + W_WHCANE + W_DOG + W_CRUTCH + W_SCOOTR + W_CHAIR + W_MTRCHR + CONDTRAV + CONDRIDE + CONDNIGH + CONDRIVE + CONDPUB + CONDSPEC + CONDTAX + is_65_older + is_18_younger, 
+                      family = binomial(link = "logit"), 
+                      data = trip_data_merged, 
+                      weights = trip_data_merged$weights)
+
+summary(model2)
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# Make predictions
+trip_data_merged$predicted_probs <- predict(model2, type = "response")
+
+# Convert to binary predictions using a threshold of 0.5
+trip_data_merged$predicted_class <- ifelse(trip_data_merged$predicted_probs > 0.5, 1, 0)
+
+# Create confusion matrix
+confusionMatrix(as.factor(trip_data_merged$predicted_class), as.factor(trip_data_merged$medical_trips_response))
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# ROC curve
+roc_curve <- roc(trip_data_merged$medical_trips_response, trip_data_merged$predicted_probs)
+
+# Plot the ROC curve
+plot(roc_curve, main = "ROC curve for model 2", col = "blue")
+
+# Compute AUC
+auc(roc_curve)
+```
+
+### Analysis of model performance from models 1 and 2
+
+Most trips are non-medical (98.2%), so the model leans towards predicting non-medical trips due to the class imbalance. The low kappa (0.0282) suggests very poor distinction between medical and non-medical trips. 
+
+Next, I will use stepwise feature selection to find the best combination of features. I hand chose all the predictors based on what I thought would be best predictors of medical visits, but I now want to use AIC to determine which variables provide the most predictive value.
+
+### Model 3: applying stepwise feature selection to model 2
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# Setting eval = FALSE so we don't run it every time we knit the file
+model3 <- stepAIC(model2, direction = "both")  
+```
+
+```{r, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+model3 <- glm(formula = medical_trips_response ~ I(R_AGE^2) + TRVLCMIN + 
+    TRPTRANS + DWELTIME + HHSIZE + HHFAMINC_new + WRKCOUNT + 
+    URBRUR + HH_RACE_new + EDUC + R_SEX + R_AGE_IMP + PHYACT + 
+    W_CANE + W_WLKR + W_CRUTCH + W_SCOOTR + W_CHAIR + CONDTRAV + 
+    CONDRIDE + CONDNIGH + CONDRIVE + CONDPUB + CONDSPEC, family = binomial(link = "logit"), 
+    data = trip_data_merged, weights = trip_data_merged$weights)
+
+summary(model3)
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# Make predictions
+trip_data_merged$predicted_probs <- predict(model3, type = "response")
+
+# Convert to binary predictions using a threshold of 0.5
+trip_data_merged$predicted_class <- ifelse(trip_data_merged$predicted_probs > 0.5, 1, 0)
+
+# Create confusion matrix
+confusionMatrix(as.factor(trip_data_merged$predicted_class), as.factor(trip_data_merged$medical_trips_response))
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# ROC curve
+roc_curve <- roc(trip_data_merged$medical_trips_response, trip_data_merged$predicted_probs)
+
+# Plot the ROC curve
+plot(roc_curve, main = "ROC curve for model 3", col = "blue")
+
+# Compute AUC
+auc(roc_curve)
+```
+
+Now, we need to adjust the cutoff from the default threshold of 0.5 due to the class imbalance $\rightarrow$ this cutoff is causing the model accuracy to be very low, low sensitivity, high specificity
+
+We need to find the optimal cutoff using the ROC curve and Youden's index (the point of maximizing sensitivity and specificity)
+
+```{r, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Compute best threshold using Youden’s Index
+best_threshold <- coords(roc_curve, "best", ret = "threshold")
+print(paste("Optimal Threshold:", best_threshold))
+```
+
+```{r, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Applying the new threshold to recalculate model performance
+
+# Evaluate the model
+
+# Make predictions
+trip_data_merged$predicted_probs <- predict(model3, type = "response")
+
+# Convert to binary predictions using a threshold of best_threshold
+trip_data_merged$predicted_class <- ifelse(trip_data_merged$predicted_probs > as.numeric(best_threshold), 1, 0)
+
+# Create confusion matrix
+confusionMatrix(as.factor(trip_data_merged$predicted_class), as.factor(trip_data_merged$medical_trips_response))
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# ROC curve
+roc_curve <- roc(trip_data_merged$medical_trips_response, trip_data_merged$predicted_probs)
+
+# Plot the ROC curve
+plot(roc_curve, main = "ROC curve for model 3", col = "blue")
+
+# Compute AUC
+auc(roc_curve)
+```
+
+### Model 4: Weighted Generalized Additive Model (GAM)
+
+GAM model allows for smooth relationships in variables that we think may be nonlinear
+
+`s()` allows for some variables to be modeled as nonlinear
+
+```{r}
+model4 <- gam(medical_trips_response ~ s(R_AGE) + s(TRVLCMIN) + 
+                 s(DWELTIME) + TRPTRANS + HHSIZE + HHFAMINC_new + 
+                 WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + 
+                 PHYACT + W_CANE + W_WLKR + W_CRUTCH + W_SCOOTR + 
+                 W_CHAIR + CONDTRAV + CONDRIDE + CONDNIGH + CONDRIVE +
+                 CONDPUB + CONDSPEC, 
+                 family = binomial(link = "logit"), 
+                 data = trip_data_merged, 
+                 weights = trip_data_merged$weights)
+
+summary(model4)
+```
+
+```{r}
+# Evaluate the model
+
+# Make predictions
+trip_data_merged$predicted_probs <- predict(model4, type = "response")
+
+# ROC curve
+roc_curve <- roc(trip_data_merged$medical_trips_response, trip_data_merged$predicted_probs)
+
+# Plot the ROC curve
+plot(roc_curve, main = "ROC curve for model 4", col = "blue")
+
+# Compute AUC
+auc(roc_curve)
+
+# Compute best threshold using Youden’s Index
+best_threshold <- coords(roc_curve, "best", ret = "threshold")
+
+# Convert to binary predictions using a threshold of best_threshold
+trip_data_merged$predicted_class <- ifelse(trip_data_merged$predicted_probs > as.numeric(best_threshold), 1, 0)
+
+# Create confusion matrix
+confusionMatrix(as.factor(trip_data_merged$predicted_class), as.factor(trip_data_merged$medical_trips_response))
+```
 
 
 
