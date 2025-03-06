@@ -53,9 +53,14 @@ There is a severe class imbalance in the response variable, so we'll need to per
 Due to the big class imbalance in the response variable (`trip_data$medical_trips_response`), we need to perform weighted logistic regression since medical trips (what we're focusing on) are very rare in the dataset
 
 ```{r}
+# Compute class proportions
+p1 <- sum(trip_data$medical_trips_response == 1) / nrow(trip_data)
+p0 <- sum(trip_data$medical_trips_response == 0) / nrow(trip_data)
+
+# Assign weights inversely proportional to class size
 trip_data$weights <- ifelse(trip_data$medical_trips_response == 1, 
-                            nrow(trip_data) / (2 * sum(trip_data$medical_trips_response == 1)),  # Weight for medical trips
-                            nrow(trip_data) / (2 * sum(trip_data$medical_trips_response == 0)))  # Weight for non-medical trips
+                            1 / p1,  # Weight for medical trips (higher if rare)
+                            1 / p0)  # Weight for non-medical trips
 ```
 
 ### Creating binary predictors for age groups
@@ -201,6 +206,42 @@ numeric_variables <- c("TRVLCMIN", "DWELTIME", "R_AGE")
 # Filter out all observations with negative values (NAs) in the numeric variable columns
 trip_data_merged <- trip_data_merged %>%
   filter(if_all(all_of(numeric_variables), ~ . >= 0))
+```
+
+### Collapsing the TRPTRANS variable
+
+There are too many levels (20), and some don't contain many observations
+
+Categories I'm using:
+
+* Personal vehicle: car, SUV, van, pickup truck, motorcycle
+* Walk/bike
+* Public transit: school bus, public or commuter bus, city to city bus, Amtrak commuter rail, subway
+* Other
+
+```{r}
+table(trip_data_merged$TRPTRANS) / nrow(trip_data_merged) * 100
+```
+
+```{r}
+trip_data_merged$TRPTRANS_new <- ifelse(trip_data_merged$TRPTRANS %in% c(3, 4, 5, 6, 8), "personal_vehicle",
+                                ifelse(trip_data_merged$TRPTRANS %in% c(1, 2), "walk_bike",
+                                ifelse(trip_data_merged$TRPTRANS %in% c(10, 11, 14, 15, 16), "public_transit",
+                                "other")))
+
+trip_data_merged$TRPTRANS_new <- as.factor(trip_data_merged$TRPTRANS_new)
+table(trip_data_merged$TRPTRANS_new)
+```
+
+### Making sure medical condition variables are binary
+
+```{r}
+# 1 = yes, 0 = no
+trip_data_merged$CONDTRAV <- ifelse(trip_data_merged$CONDTRAV == 2, 0, trip_data_merged$CONDTRAV)
+trip_data_merged$CONDRIDE <- ifelse(trip_data_merged$CONDRIDE == 2, 0, trip_data_merged$CONDRIDE)
+trip_data_merged$CONDNIGH <- ifelse(trip_data_merged$CONDNIGH == 2, 0, trip_data_merged$CONDNIGH)
+trip_data_merged$CONDPUB <- ifelse(trip_data_merged$CONDPUB == 2, 0, trip_data_merged$CONDPUB)
+trip_data_merged$CONDSPEC <- ifelse(trip_data_merged$CONDSPEC == 2, 0, trip_data_merged$CONDSPEC)
 ```
 
 # 3. Modeling
@@ -511,7 +552,7 @@ Since the model didn't improve much after SMOTE resampling, next I will try down
 Downsampling downsamples the majority class (non-medical trips)
 
 ```{r, message = FALSE, warning = FALSE}
-model_variables <- c("R_AGE", "TRVLCMIN", "DWELTIME", "TRPTRANS", "HHSIZE", 
+model_variables <- c("R_AGE", "TRVLCMIN", "DWELTIME", "TRPTRANS_new", "HHSIZE", 
                 "HHFAMINC_new", "WRKCOUNT", "URBRUR", "HH_RACE_new", "EDUC", 
                 "R_SEX", "PHYACT", "W_CANE", "W_WLKR", "W_CRUTCH", "W_SCOOTR", 
                 "W_CHAIR", "CONDTRAV", "CONDRIDE", "CONDNIGH", "CONDRIVE", 
@@ -522,7 +563,7 @@ trip_data_merged_copy <- data.frame(trip_data_merged, stringsAsFactors = FALSE) 
 trip_data_merged_copy <- trip_data_merged_copy[, model_variables]
 
 # Define categorical variables
-categorical_vars <- c("TRPTRANS", "HHFAMINC_new", "URBRUR", "HH_RACE_new",
+categorical_vars <- c("TRPTRANS_new", "HHFAMINC_new", "URBRUR", "HH_RACE_new",
                       "EDUC", "R_SEX", "PHYACT", "W_CANE", "W_WLKR",
                       "W_CRUTCH", "W_SCOOTR", "W_CHAIR", "CONDTRAV",
                       "CONDRIDE", "CONDNIGH", "CONDRIVE", "CONDPUB", "CONDSPEC")
@@ -587,10 +628,6 @@ for (var in categorical_vars) {
 # Drop unused levels
 trip_data_merged_copy <- droplevels(trip_data_merged_copy)
 trip_data_downsampled <- droplevels(trip_data_downsampled)
-
-# Manually fixing a problematic variable
-trip_data_merged_copy$TRPTRANS <- factor(trip_data_merged_copy$TRPTRANS, levels = levels(trip_data_downsampled$TRPTRANS))
-trip_data_merged_copy$TRPTRANS <- droplevels(trip_data_merged_copy$TRPTRANS)
 
 # Verify that model matrices align
 train_matrix <- model.matrix(~ ., data = trip_data_downsampled)
@@ -664,31 +701,35 @@ After trying the physical activity and medical device interactions, I noticed no
 
 I also removed the interaction between household income and education level `ti(HHFAMINC_new, EDUC, k = c(3, 5))` and the interaction between number of workers and household size `ti(WRKCOUNT,HHSIZE) ` since they didn't seem to significantly contribute either
 
+I couldn't actually do any of the interactions that involved unordered factors (ex. `TRPTRANS` transportation mode)
+
+I implemented the new TRPTRANS variable collapsed this time since there were too many levels previously with not many observations
+
 ```{r}
 # Ensure data is the correct format for interaction terms
-trip_data_downsampled$TRPTRANS <- as.numeric(as.factor(trip_data_downsampled$TRPTRANS))
-trip_data_downsampled$URBRUR <- as.numeric(as.factor(trip_data_downsampled$URBRUR))
-trip_data_downsampled$PHYACT <- as.numeric(as.factor(trip_data_downsampled$PHYACT))
-trip_data_downsampled$HHFAMINC_new <- as.numeric(as.factor(trip_data_downsampled$HHFAMINC_new))
-trip_data_downsampled$EDUC <- as.numeric(as.factor(trip_data_downsampled$EDUC))
+trip_data_downsampled$TRPTRANS_new <- as.factor(trip_data_downsampled$TRPTRANS_new)
+trip_data_downsampled$URBRUR <- as.factor(trip_data_downsampled$URBRUR)
+trip_data_downsampled$PHYACT <- as.factor(trip_data_downsampled$PHYACT)
+trip_data_downsampled$HHFAMINC_new <- as.factor(trip_data_downsampled$HHFAMINC_new)
+trip_data_downsampled$EDUC <- as.factor(trip_data_downsampled$EDUC)
 ```
 
 ```{r}
 # Use the by = inside the interaction terms for binary variables 
 # Manually specify k when a categorical variable has fewer than 5 levels
 
-model7 <- gam(medical_trips_response ~ s(R_AGE, bs = "cs") + s(TRVLCMIN, bs = "cs") + s(DWELTIME, bs = "cs") + TRPTRANS + HHSIZE + HHFAMINC_new + WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + PHYACT + W_CANE + W_WLKR + W_CRUTCH + W_SCOOTR + W_CHAIR + CONDTRAV + CONDRIDE + CONDNIGH + CONDRIVE + CONDPUB + CONDSPEC + ti(TRPTRANS, by = URBRUR)  + ti(R_AGE, DWELTIME) + ti(TRVLCMIN, TRPTRANS), family = binomial(link = "logit"), data = trip_data_downsampled)  
+model7 <- gam(medical_trips_response ~ s(R_AGE, bs = "cs") + s(TRVLCMIN, bs = "cs") + s(DWELTIME, bs = "cs") + TRPTRANS_new + HHSIZE + HHFAMINC_new + WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + PHYACT + W_CANE + W_WLKR + W_CRUTCH + W_SCOOTR + W_CHAIR + CONDTRAV + CONDRIDE + CONDNIGH + CONDRIVE + CONDPUB + CONDSPEC  + ti(R_AGE, DWELTIME) + ti(R_AGE, by = TRPTRANS_new) + ti(DWELTIME, by = HHFAMINC_new), family = binomial(link = "logit"), data = trip_data_downsampled)  
 
 summary(model7)
 ```
 
 ```{r}
 # Make sure trip_data_merged data is compatible with the transformations we made on trip_data_downsampled
-trip_data_merged_copy$TRPTRANS <- as.numeric(as.factor(trip_data_merged_copy$TRPTRANS))
-trip_data_merged_copy$URBRUR <- as.numeric(as.factor(trip_data_merged_copy$URBRUR))
-trip_data_merged_copy$PHYACT <- as.numeric(as.factor(trip_data_merged_copy$PHYACT))
-trip_data_merged_copy$HHFAMINC_new <- as.numeric(as.factor(trip_data_merged_copy$HHFAMINC_new))
-trip_data_merged_copy$EDUC <- as.numeric(as.factor(trip_data_merged_copy$EDUC))
+trip_data_merged_copy$TRPTRANS_new <- as.factor(trip_data_merged_copy$TRPTRANS_new)
+trip_data_merged_copy$URBRUR <- as.factor(trip_data_merged_copy$URBRUR)
+trip_data_merged_copy$PHYACT <- as.factor(trip_data_merged_copy$PHYACT)
+trip_data_merged_copy$HHFAMINC_new <- as.factor(trip_data_merged_copy$HHFAMINC_new)
+trip_data_merged_copy$EDUC <- as.factor(trip_data_merged_copy$EDUC)
 ```
 
 ```{r, message = FALSE, warning = FALSE}
@@ -716,3 +757,43 @@ trip_data_merged_copy$predicted_class <- ifelse(trip_data_merged_copy$predicted_
 confusionMatrix(as.factor(trip_data_merged_copy$predicted_class), as.factor(trip_data_merged_copy$medical_trips_response))
 ```
 
+Model 7 is still bad because the model, which was trained on downsampled data, doesn't appear to generalize well to new, unseen, imbalanced data  
+
+I'm going to try weighted GAM again (but using a different weight calculation method) but using the improvements from model 7 (interactions and collapsed categorical variables)
+
+### Model 8: weighted GAM with model 7's improvements
+
+```{r, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+model8 <- gam(medical_trips_response ~ s(R_AGE, bs = "cs") + s(TRVLCMIN, bs = "cs") + s(DWELTIME, bs = "cs") + TRPTRANS_new + HHSIZE + HHFAMINC_new + WRKCOUNT + URBRUR + HH_RACE_new + EDUC + R_SEX + PHYACT + W_CANE + W_WLKR + W_CRUTCH + W_SCOOTR + W_CHAIR + CONDTRAV + CONDRIDE + CONDNIGH + CONDRIVE + CONDPUB + CONDSPEC  + ti(R_AGE, DWELTIME) + ti(R_AGE, by = TRPTRANS_new) + ti(DWELTIME, by = HHFAMINC_new), family = binomial(link = "logit"), data = trip_data_merged, weights = trip_data_merged$weights)
+
+summary(model8)
+```
+
+```{r, message = FALSE, warning = FALSE, eval = FALSE}
+# eval = FALSE for all previous models before my final model
+# Evaluate the model
+
+# Make predictions
+trip_data_merged$predicted_probs <- predict(model8, type = "response")
+
+# ROC curve
+roc_curve <- roc(trip_data_merged$medical_trips_response, trip_data_merged$predicted_probs)
+
+# Plot the ROC curve
+plot(roc_curve, main = "ROC curve for model 8", col = "blue")
+
+# Compute AUC
+auc(roc_curve)
+
+# Compute best threshold using Youden’s Index
+best_threshold <- coords(roc_curve, "best", ret = "threshold")
+
+# Convert to binary predictions using a threshold of best_threshold
+trip_data_merged$predicted_class <- ifelse(trip_data_merged$predicted_probs > as.numeric(best_threshold), 1, 0)
+
+# Create confusion matrix
+confusionMatrix(as.factor(trip_data_merged$predicted_class), as.factor(trip_data_merged$medical_trips_response))
+```
+
+Model 8 performed very similarly to model 7, so I'm just going to keep model 7
