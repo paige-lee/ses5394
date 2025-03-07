@@ -724,6 +724,11 @@ summary(model7)
 ```
 
 ```{r}
+# Plot the nonlinear terms and interactions
+plot(model7, pages = 1, shade = TRUE, rug = TRUE)
+```
+
+```{r}
 # Make sure trip_data_merged data is compatible with the transformations we made on trip_data_downsampled
 trip_data_merged_copy$TRPTRANS_new <- as.factor(trip_data_merged_copy$TRPTRANS_new)
 trip_data_merged_copy$URBRUR <- as.factor(trip_data_merged_copy$URBRUR)
