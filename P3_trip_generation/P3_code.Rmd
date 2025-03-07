@@ -759,7 +759,7 @@ best_threshold <- coords(roc_curve, "best", ret = "threshold")
 trip_data_merged_copy$predicted_class <- ifelse(trip_data_merged_copy$predicted_probs > as.numeric(best_threshold), 1, 0)
 
 # Create confusion matrix
-confusionMatrix(as.factor(trip_data_merged_copy$predicted_class), as.factor(trip_data_merged_copy$medical_trips_response))
+confusionMatrix(as.factor(trip_data_merged_copy$predicted_class), as.factor(trip_data_merged_copy$medical_trips_response), positive = "1")
 ```
 
 Model 7 is still bad because the model, which was trained on downsampled data, doesn't appear to generalize well to new, unseen, imbalanced data  
