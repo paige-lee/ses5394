@@ -1,0 +1,190 @@
+---
+title: "P4_code"
+output: html_document
+---
+
+# Load libraries
+
+```{r, message = FALSE, warning = FALSE}
+options(java.parameters = '-Xmx4G')
+
+library(tidyverse)
+library(here)
+library(knitr)
+library(tigris)
+library(stringr)
+library(maptiles)
+library(tidyterra)
+library(r5r)
+library(sf)
+library(leaflet)
+
+here("P4_trip_distribution", "grvty_balancing.R") |> source()
+```
+
+# Select a study area
+
+There are 939 core-based statistical areas (CBSAs) in the U.S. $\rightarrow$ 393 are metropolitan areas (MSAs), and 542 are micropolitan areas ($\mu$SAs) 
+
+```{r}
+all_cbsas <- core_based_statistical_areas(progress_bar = FALSE,
+                                          year = 2024) |>
+  select(NAMELSAD) |>
+  mutate(type = ifelse(!is.na(str_match(NAMELSAD, "Metro")), "Metro", "Micro")) |>
+  mutate(type = as.character(type))
+
+table(all_cbsas$type) |>
+  kable()
+```
+
+The sweet spot is to select a large micro area or a small metro area.
+
+```{r}
+salem <- all_cbsas |>
+  filter(NAMELSAD == "Salem, OH Micro Area") |>
+  st_transform("WGS84")
+
+base_map <- get_tiles(salem,
+                      provider = "CartoDB.Positron",
+                      zoom = 9,
+                      crop = TRUE)
+
+ggplot(salem) +
+  geom_spatraster_rgb(data = base_map) +
+  geom_sf(fill = NA,
+          color = "orange") +
+  theme_void()
+```
+
+# Load job data
+
+The LEHD Origin-Destination Employment Statistics (LODES) dataset provides the number of workers who live and work between any pair of census blocks in a given state in a given year. 
+
+Counties in the Salem, OH Micro Area
+
+* Columbiana County, OH (FIPS code: 39029)
+
+Since the Youngstown-Warren, OH Metro Area spans both OH and PA, we'll need to download and process the LODES data for both states, then combine the results and filter for the counties of interest.
+
+```{r}
+# Set year and FIPS codes
+year <- "2021"
+salem_counties_5_digit <- c("39029")  
+
+# Function to load and filter data for a given state
+load_state_data <- function(state_abbrev, counties_5_digit, year) {
+  url <- paste0("https://lehd.ces.census.gov/data/lodes/LODES8/",
+                state_abbrev,
+                "/od/",
+                state_abbrev,
+                "_od_main_JT00_",
+                year,
+                ".csv.gz")
+  
+  read_csv(url, col_types = cols()) |>
+    mutate(w_county = substr(w_geocode, 1, 5),
+           h_county = substr(h_geocode, 1, 5)) |>
+    filter(h_county %in% counties_5_digit & w_county %in% counties_5_digit) |>
+    mutate(w_geocode = as.character(w_geocode),
+           h_geocode = as.character(h_geocode))
+}
+
+# Load the OH LODES data 
+oh_data <- load_state_data("oh", salem_counties_5_digit, year)
+
+head(oh_data)
+```
+
+# Aggregate data to zone totals
+
+There are three industry categories: goods, trade, and services. We want to create a trip generation table that shows the number of workers produced (by living in a zone) and attracted to (by working in a zone) for each industry category.
+
+```{r}
+# Calculate the total number of trip productions
+total_prod <- oh_data |>
+  group_by(h_geocode) |> # Group by home census block
+  summarise(goods_p = sum(SI01), # Goods
+            trade_p = sum(SI02), # Trade
+            serve_p = sum(SI03), # Service
+            total_p = sum(S000)) |> # Total 
+  rename(geocode = h_geocode)
+
+# Calculate the total number of trip attractions
+total_attr <- oh_data |>
+  group_by(w_geocode) |> # Group by home census block 
+  summarize(goods_a = sum(SI01), # Goods
+            trade_a = sum(SI02), # Trade
+            serve_a = sum(SI03), # Service
+            total_a = sum(S000)) |> # Total
+  rename(geocode = w_geocode)
+
+# Calculate trip generations (trip productions + trip attractions)
+trip_gen <- full_join(total_prod,
+                      total_attr) |>
+  replace_na(list(goods_p = 0, 
+                  goods_a = 0,
+                  trade_p = 0,
+                  trade_a = 0,
+                  serve_p = 0,
+                  serve_a = 0,
+                  total_p = 0,
+                  total_a = 0))
+
+head(trip_gen)
+```
+
+# Load spatial data
+
+```{r, warning = FALSE, message = FALSE}
+# Download the census block boundaries for the counties of interest
+
+# Define county FIPS (3-digit codes)
+oh_counties_3_digit <- c("029") 
+
+# Load block shapefiles 
+msa_blocks <- blocks(state = "OH",
+                    county = oh_counties_3_digit,
+                    progress_bar = FALSE)
+
+# Plotting the map
+ggplot(msa_blocks) +
+  geom_spatraster_rgb(data = base_map) +
+  geom_sf(fill = NA, color = "orange") +
+  theme_void()
+```
+
+# Creating `trip_gen_locs`
+
+We will right join the trip generation table to the census blocks of interest (only include the ones in the trip generation table)
+
+```{r}
+trip_gen_locs <- msa_blocks |>
+  rename(geocode = GEOID20) |>
+  right_join(trip_gen) |>
+  select(geocode, 
+         goods_p, 
+         trade_p, 
+         serve_p,
+         total_p,
+         goods_a, 
+         trade_a,
+         serve_a,
+         total_a) |>
+  st_transform("WGS84")
+
+leaflet(trip_gen_locs) |>
+  addProviderTiles(provider = "CartoDB.Positron") |>
+  addPolygons(weight = 2,
+              color = "orange",
+              fillColor = "orange",
+              fillOpacity = 0.1,
+              highlightOptions = highlightOptions(weight = 3,
+                                                  fillOpacity = 0.5),
+              label = trip_gen_locs$geocode)
+
+nrow(trip_gen_locs) # This number of blocks is indicative of the computational expense and how long it will take to skim the network 
+```
+
+# Load the network
+
+
