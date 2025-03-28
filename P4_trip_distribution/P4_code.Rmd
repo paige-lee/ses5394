@@ -6,6 +6,9 @@ output: html_document
 # Load libraries
 
 ```{r, message = FALSE, warning = FALSE}
+# Set Java 21 rather than Java 24
+Sys.setenv(JAVA_HOME = "/Library/Java/JavaVirtualMachines/jdk-21.jdk/Contents/Home")
+library(rJava)
 options(java.parameters = '-Xmx4G')
 
 library(tidyverse)
@@ -186,5 +189,81 @@ nrow(trip_gen_locs) # This number of blocks is indicative of the computational e
 ```
 
 # Load the network
+
+We will use BBBike (a cycle route planner) to extract/download the OpenStreetMap network
+
+Details
+
+* Area: 'Salem, Columbiana County, Ohio, 44460, United States' covers 80 square km
+* Format: Protocolbuffer (PBF)
+
+I downloaded the network .pbf file from BBBike, saved it in a folder called `network` $\rightarrow$ in the code below, we will use r5r to save the .pbf file as two shape files in an empty folder I created called `data`
+
+Note: I had to manually delete the cache from my laptop in order to regenerate the shape files after redoing the BBBike step 
+
+It seems like the goal is to extract the smallest street network that overlaps with the trip generation zones because if the street network area is too large, I start getting some errors when trying to save the .pbf file as shape files
+
+```{r, eval = FALSE}
+# Setting to eval = FALSE so that we don't repeat this process again
+salem_core <- setup_r5(
+  data_path = here("P4_trip_distribution", "network"),
+  overwrite = TRUE,
+  verbose = TRUE
+)
+
+street_vis <- street_network_to_sf(salem_core)
+
+street_lines <- street_vis$edges
+street_pts <- street_vis$vertices
+
+# Write/save as two shape files
+st_write(street_lines,
+         here("P4_trip_distribution",
+              "data",
+              "street-lines.shp"))
+
+st_write(street_pts,
+         here("P4_trip_distribution",
+              "data",
+              "street-pts.shp"))
+
+stop_r5()
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Reading the two network shape files now that they're created
+street_lines <- here("P4_trip_distribution",
+                     "data",
+                     "street-lines.shp") |>
+  st_read()
+
+street_pts <- here("P4_trip_distribution",
+                     "data",
+                     "street-pts.shp") |>
+  st_read()
+```
+
+# Overlaying the street network and trip generation zones
+
+We want to make sure that the street network (red) covers at least the full trip generation zones (green)
+
+If this is not the case, we need to shift the target area and re-download the BBBike OpenStreetMap network (I had to do this)
+
+```{r}
+base_map <- get_tiles(street_lines,
+                      provider = "CartoDB.Positron",
+                      zoom = 8,
+                      crop = TRUE)
+
+ggplot() +
+  geom_spatraster_rgb(data = base_map) +
+  geom_sf(data = trip_gen_locs,
+          color = "palegreen3",
+          fill = "palegreen") +
+  geom_sf(data = street_lines,
+          color =  "salmon") +
+  theme_void()
+```
+
 
 
