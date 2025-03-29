@@ -102,7 +102,7 @@ head(oh_data)
 
 There are three industry categories: goods, trade, and services. We want to create a trip generation table that shows the number of workers produced (by living in a zone) and attracted to (by working in a zone) for each industry category.
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 # Calculate the total number of trip productions
 total_prod <- oh_data |>
   group_by(h_geocode) |> # Group by home census block
@@ -160,7 +160,7 @@ ggplot(msa_blocks) +
 
 We will right join the trip generation table to the census blocks of interest (only include the ones in the trip generation table)
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 trip_gen_locs <- msa_blocks |>
   rename(geocode = GEOID20) |>
   right_join(trip_gen) |>
@@ -230,7 +230,7 @@ st_write(street_pts,
 stop_r5()
 ```
 
-```{r, message = FALSE, warning = FALSE}
+```{r, message = FALSE, warning = FALSE, error = FALSE, results ="hide"}
 # Reading the two network shape files now that they're created
 street_lines <- here("P4_trip_distribution",
                      "data",
@@ -264,6 +264,577 @@ ggplot() +
           color =  "salmon") +
   theme_void()
 ```
+
+# Skim the network
+
+First, we will represent the block locations as zone centroid points, then we will calculate the travel time by car from every census block to every other census block
+
+We use the `st_point_on_surface()` function to ensure that all points are on the inside of the polygon (rather than in a lake for instance) to prevent any points from being located outside the zone 
+
+```{r, eval = FALSE}
+# Setting eval = FALSE to prevent skimming the network every single time
+trip_gen_loc_ids <- trip_gen_locs |>
+  st_point_on_surface() |>
+  st_nearest_feature(street_pts)
+
+trip_gen_pts <- street_pts[trip_gen_loc_ids,] |>
+  mutate(id = trip_gen_locs$geocode) |>
+  select(id)
+
+# Calculating travel time matrix (skimming the network)
+salem_core <- here("P4_trip_distribution", "network") |>
+  setup_r5()
+
+skim <- travel_time_matrix(salem_core,
+                           origins = trip_gen_pts,
+                           destinations = trip_gen_pts,
+                           mode = "CAR",
+                           max_trip_duration = 180)
+
+stop_r5()
+
+# Write the csv file 
+write_csv(skim, file = here("P4_trip_distribution",
+                            "data",
+                            "salem-skim.csv"))
+```
+
+```{r}
+# Read the data
+skim <- read_csv(here("P4_trip_distribution",
+                      "data",
+                      "salem-skim.csv"),
+                 col_types = "ccn")
+
+head(skim) |>   
+  kable()
+```
+
+```{r}
+paste0("Number of blocks in the study area: ", nrow(trip_gen_locs))
+paste0("Total number of pairs in the skim: ", nrow(skim))
+paste0("Does the number of blocks in the study area squared equal the total number of pairs in the skim? ", nrow(trip_gen_locs)^2 == nrow(skim))
+```
+
+Yes, since the number of blocks in the study area squared equals the total number of pairs in the skim, we can move forward. This means that the r5r package was able to find a path through the network between every possible pair of census blocks. 
+
+# Apply a gravity model
+
+We will apply a gravity model to distribute trips from each production zone among all possible attraction zones.
+
+Gravity model
+
+* The attractiveness of a zone to production increases with the number of attractions in it and decreases with the cost of travel time 
+* Travel time vs. attractiveness can be modeled with a decay function 
+* $f(c_{ij}) = exp(-\beta c_{ij})$
+  - $f(c_{ij})$ is the friction between zones i and j
+  - $c_{ij}$ is the travel time between zones i and j
+  - $\beta$ is a parameter that quantifies how sensitive travelers are to travel time
+    + Positive $\beta$ implies greater sensitivity to travel time $\rightarrow$ people are less attracted to longer travel times
+    + Negative $\beta$ implies lower sensitivity to travel time $\rightarrow$ people are more attracted to longer travel times (counterintuitive and problematic)
+
+```{r, message = FALSE, warning = FALSE}
+flow_tt <- oh_data |>
+  rename(from_id = h_geocode,
+         to_id = w_geocode) |>
+  right_join(skim) |>
+  rename(flow_total = S000,
+         flow_goods = SI01,
+         flow_trade = SI02,
+         flow_serve = SI03) |>
+  replace_na(list(flow_total = 0,
+                  flow_goods = 0,
+                  flow_trade = 0,
+                  flow_serve = 0))
+
+avg_tts <- tibble(`Worker sector` = c("Goods", "Trade", "Service", "Total"),
+                  `Average travel time (observed)` = c(
+                    sum(flow_tt$flow_goods * flow_tt$travel_time_p50) / 
+                      sum(flow_tt$flow_goods),
+                    sum(flow_tt$flow_trade * flow_tt$travel_time_p50) / 
+                      sum(flow_tt$flow_trade),
+                    sum(flow_tt$flow_serve * flow_tt$travel_time_p50) / 
+                      sum(flow_tt$flow_serve),
+                    sum(flow_tt$flow_total * flow_tt$travel_time_p50) / 
+                      sum(flow_tt$flow_total)))
+                  
+kable(avg_tts, digits = 1)
+```
+
+On average, workers in goods-producing industries live 17.1 minutes from work, workers in trade and retail live 16.9 minutes from work, and workers in service live 16.4 minutes from work. On average, among all workers from all industries, the average travel time from home to work is 16.6 minutes.
+
+```{r}
+betas <- 1/avg_tts$`Average travel time (observed)`
+names(betas) <- c("Goods", "Trade", "Service", "Total")
+
+initial_betas <- tibble(`Worker sector` = names(betas),
+                  `Initial β value` = betas)
+                  
+kable(initial_betas, digits = 3)
+```
+
+```{r}
+friction <- tibble(`Travel time (min)` = seq(0, 30, by=1)) |>
+  mutate(Goods = exp(-1 * betas["Goods"] * `Travel time (min)`),
+         Trade = exp(-1 * betas["Trade"] * `Travel time (min)`),
+         Service = exp(-1 * betas["Service"] * `Travel time (min)`),
+         `All industries` = exp(-1 * betas["Total"] * `Travel time (min)`)) |>
+  pivot_longer(cols = -`Travel time (min)`,
+               names_to = "Industry") |>
+  rename(`Destination attractiveness` = value)
+
+ggplot(friction) +
+  geom_line(aes(x = `Travel time (min)`,
+                y = `Destination attractiveness`,
+                linetype = Industry)) +
+  scale_x_continuous(breaks = seq(0, 30, by=5)) +
+  scale_y_continuous(breaks = seq(0, 1.1, by=0.1)) +
+  theme_minimal()
+```
+
+Above is a plot of the sensitivity to travel time (beta values) for workers across the three industries and overall on average
+
+We can apply these calculated beta values to calculate the friction factors between zones. Friction factors quantify the effect of travel time on trips between zones; higher friction factors indicate easier travel with lower travel time. 
+
+```{r}
+# Calculating friction factors 
+flow_tt <- flow_tt |>
+  mutate(friction_goods = exp(-1 * betas["Goods"] * travel_time_p50),
+         friction_trade = exp(-1 * betas["Trade"] * travel_time_p50),
+         friction_serve = exp(-1 * betas["Service"] * travel_time_p50),
+         friction_total = exp(-1 * betas["Total"] * travel_time_p50))
+```
+
+# Estimating the initial trip matrix
+
+The number of trips between any two zones can be calculated as $T_{ij} = A_iO_iB_jD_jf_{ij}$
+
+* $T_{ij}$ is the number of trips between zones i and j
+* $O_i$ is the number of origins/productions from zone i
+* $D_j$ is the number of destinations/attractions to zone j
+* $A_i$ and $B_j$ are balancing factors to ensure that the total number of attractions and productions remain equal
+
+```{r, eval = FALSE}
+# Setting eval = FALSE to prevent us from running this every time
+flow_goods_est <- grvty_balancing(od_zones = trip_gen,
+                                  friction = flow_tt,
+                                  zone_id = "geocode",
+                                  zone_o = "goods_p",
+                                  zone_d = "goods_a",
+                                  friction_o_id = "from_id",
+                                  friction_d_id = "to_id",
+                                  friction_factor = "friction_goods",
+                                  tolerance = 0.001,
+                                  max_iter = 100)
+
+flow_trade_est <- grvty_balancing(od_zones = trip_gen,
+                                  friction = flow_tt,
+                                  zone_id = "geocode",
+                                  zone_o = "trade_p",
+                                  zone_d = "trade_a",
+                                  friction_o_id = "from_id",
+                                  friction_d_id = "to_id",
+                                  friction_factor = "friction_trade",
+                                  tolerance = 0.001,
+                                  max_iter = 100)
+
+flow_serve_est <- grvty_balancing(od_zones = trip_gen,
+                                  friction = flow_tt,
+                                  zone_id = "geocode",
+                                  zone_o = "serve_p",
+                                  zone_d = "serve_a",
+                                  friction_o_id = "from_id",
+                                  friction_d_id = "to_id",
+                                  friction_factor = "friction_serve",
+                                  tolerance = 0.001,
+                                  max_iter = 100)
+
+flow_total_est <- grvty_balancing(od_zones = trip_gen,
+                                  friction = flow_tt,
+                                  zone_id = "geocode",
+                                  zone_o = "total_p",
+                                  zone_d = "total_a",
+                                  friction_o_id = "from_id",
+                                  friction_d_id = "to_id",
+                                  friction_factor = "friction_total",
+                                  tolerance = 0.001,
+                                  max_iter = 100)
+
+write_csv(flow_goods_est$flows,
+          file = here("P4_trip_distribution",
+                      "data",
+                      "init-goods-flow.csv"))
+
+write_csv(flow_trade_est$flows,
+          file = here("P4_trip_distribution",
+                      "data",
+                      "init-trade-flow.csv"))
+
+write_csv(flow_serve_est$flows,
+          file = here("P4_trip_distribution",
+                      "data",
+                      "init-serve-flow.csv"))
+
+write_csv(flow_total_est$flows,
+          file = here("P4_trip_distribution",
+                      "data",
+                      "init-total-flow.csv"))
+```
+
+```{r}
+# Reading the saved data
+flow_goods <- here("P4_trip_distribution",
+                   "data",
+                   "init-goods-flow.csv") |>
+  read_csv(col_types = "ccn") |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         goods_flow_est = flow)
+
+flow_trade <- here("P4_trip_distribution",
+                   "data",
+                   "init-trade-flow.csv") |>
+  read_csv(col_types = "ccn") |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         trade_flow_est = flow)
+
+flow_serve <- here("P4_trip_distribution",
+                   "data",
+                   "init-serve-flow.csv") |>
+  read_csv(col_types = "ccn") |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         serve_flow_est = flow)
+
+flow_total <- here("P4_trip_distribution",
+                   "data",
+                   "init-total-flow.csv") |>
+  read_csv(col_types = "ccn") |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         total_flow_est = flow)
+```
+
+```{r, message = FALSE, warning = FALSE}
+flow_tt <- flow_tt |>
+  left_join(flow_goods) |>
+  left_join(flow_trade) |>
+  left_join(flow_serve) |> 
+  left_join(flow_total)
+
+# Comparing the average estimated travel time to the average observed travel time
+avg_tts <- avg_tts |>
+  mutate(`Average travel time (estimated)` = c(
+    sum(flow_tt$goods_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$goods_flow_est),
+    sum(flow_tt$trade_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$trade_flow_est),
+    sum(flow_tt$serve_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$serve_flow_est),
+    sum(flow_tt$total_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$total_flow_est)))
+
+avg_tts |>
+  kable(digits = 1)
+```
+
+# Evaluating the model accuracy via RMSE and visually
+
+The two average travel times observed vs. estimated are very different, so we should calculate the RMSE 
+
+```{r}
+avg_tts <- avg_tts |>
+  mutate(rmse = c((mean((flow_tt$flow_goods - flow_tt$goods_flow_est)^2))^0.5,
+                  (mean((flow_tt$flow_trade - flow_tt$trade_flow_est)^2))^0.5,
+                  (mean((flow_tt$flow_serve - flow_tt$serve_flow_est)^2))^0.5,
+                  (mean((flow_tt$flow_total - flow_tt$total_flow_est)^2))^0.5))
+
+kable(avg_tts, digits = 2)
+```
+
+```{r}
+# Plotting function to visualize the estimated vs. observed number of production attraction pairs
+plot_flows <- function(flow_df,
+                       obs_col_name,
+                       est_col_name) {
+  
+  summary <- flow_df |>
+    rename(obs = all_of(obs_col_name),
+           est = all_of(est_col_name)) |>
+    group_by(obs, est) |>
+    summarize(n = n()) 
+  
+  max_scale <- max(summary$obs, summary$est)
+  my_interval <- ceiling(max_scale / 10)
+  dot_size <- floor(70 / max_scale)
+  
+  max_n_exp = round(log10(max(summary$n)))
+  
+  ggplot(summary) +
+    geom_point(aes(x = obs,
+                   y = est,
+                   color = n),
+               size = dot_size) +
+    scale_x_continuous(name = "Observed flow", 
+                       limits = c(0, max_scale),
+                       breaks = seq(0, max_scale, by=my_interval)) +
+    scale_y_continuous(name = "Estimated flow", 
+                       limits = c(0, max_scale),
+                       breaks = seq(0, max_scale, by=my_interval)) +
+    scale_color_viridis_c(transform = "log",
+                          breaks = my_breaks <- c(10^seq(-1, 
+                                                         max_n_exp, 
+                                                         by=1)),
+                          labels = formatC(my_breaks, format = "d", 
+                                           big.mark = ","),
+                          direction = -1,
+                          name = "Number of P-A pairs") +
+    theme_minimal()
+  
+    
+}
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Visualizing estimated vs. observed for the goods sector
+plot_flows(flow_tt, 
+           obs_col_name = "flow_goods",
+           est_col_name = "goods_flow_est")
+
+# Visualizing estimated vs. observed for the trade sector
+plot_flows(flow_tt, 
+           obs_col_name = "flow_trade",
+           est_col_name = "trade_flow_est")
+
+# Visualizing estimated vs. observed for the service sector
+plot_flows(flow_tt, 
+           obs_col_name = "flow_serve",
+           est_col_name = "serve_flow_est")
+
+# Visualizing estimated vs. observed for all sectors combined
+plot_flows(flow_tt, 
+           obs_col_name = "flow_total",
+           est_col_name = "total_flow_est")
+```
+
+# Calibrate the gravity model
+
+Our initial guess of $\beta = \frac{1}{c^*}$ was ok, but we can calibrate/improve the beta values further
+
+```{r, eval = FALSE}
+# Setting eval = FALSE to prevent from running again
+
+flow_tt <- flow_tt |>
+  select(-goods_flow_est,
+         -trade_flow_est,
+         -serve_flow_est)
+
+## Calibrate goods beta
+calibrated_flows_goods <- grvty_calibrate(obs_flow_tt = flow_tt,
+                                          o_id_col = "from_id",
+                                          d_id_col = "to_id",
+                                          obs_flow_col = "flow_goods",
+                                          tt_col = "travel_time_p50",
+                                          tolerance_balancing = 0.0001,
+                                          max_iter_balancing = 30,
+                                          tolerance_calibration = 0.2,
+                                          max_iter_calibration = 30)
+
+beta_goods <- calibrated_flows_goods$beta
+
+goods_flow_est <- calibrated_flows_goods$flows |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         goods_flow_est = flow_est) |>
+  select(from_id, to_id, goods_flow_est)
+
+flow_tt <- flow_tt |>
+  left_join(goods_flow_est)
+
+## Calibrate trade beta
+calibrated_flows_trade <- grvty_calibrate(obs_flow_tt = flow_tt,
+                                          o_id_col = "from_id",
+                                          d_id_col = "to_id",
+                                          obs_flow_col = "flow_trade",
+                                          tt_col = "travel_time_p50",
+                                          tolerance_balancing = 0.0001,
+                                          max_iter_balancing = 30,
+                                          tolerance_calibration = 0.2,
+                                          max_iter_calibration = 30)
+
+beta_trade <- calibrated_flows_trade$beta
+
+trade_flow_est <- calibrated_flows_trade$flows |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         trade_flow_est = flow_est) |>
+  select(from_id, to_id, trade_flow_est)
+
+flow_tt <- flow_tt |>
+  left_join(trade_flow_est)
+
+## calibrate service beta
+calibrated_flows_serve <- grvty_calibrate(obs_flow_tt = flow_tt,
+                                          o_id_col = "from_id",
+                                          d_id_col = "to_id",
+                                          obs_flow_col = "flow_serve",
+                                          tt_col = "travel_time_p50",
+                                          tolerance_balancing = 0.0001,
+                                          max_iter_balancing = 30,
+                                          tolerance_calibration = 0.2,
+                                          max_iter_calibration = 30)
+
+beta_serve <- calibrated_flows_serve$beta
+
+serve_flow_est <- calibrated_flows_serve$flows |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         serve_flow_est = flow_est) |>
+  select(from_id, to_id, serve_flow_est)
+
+flow_tt <- flow_tt |>
+  left_join(serve_flow_est)
+
+## calibrate total beta
+calibrated_flows_total <- grvty_calibrate(obs_flow_tt = flow_tt,
+                                          o_id_col = "from_id",
+                                          d_id_col = "to_id",
+                                          obs_flow_col = "flow_total",
+                                          tt_col = "travel_time_p50",
+                                          tolerance_balancing = 0.0001,
+                                          max_iter_balancing = 30,
+                                          tolerance_calibration = 0.2,
+                                          max_iter_calibration = 30)
+
+beta_total <- calibrated_flows_total$beta
+
+total_flow_est <- calibrated_flows_total$flows |>
+  rename(from_id = o_id,
+         to_id = d_id,
+         total_flow_est = flow_est) |>
+  select(from_id, to_id, total_flow_est)
+
+flow_tt <- flow_tt |>
+  left_join(total_flow_est)
+
+betas_table <- tibble(Industry = c("Goods", 
+                                   "Trade",
+                                   "Service",
+                                   "Total"),
+                      beta_initial = betas,
+                      beta_calibrated = c(beta_goods,
+                                          beta_trade,
+                                          beta_serve,
+                                          beta_total))
+write_csv(flow_tt,
+          here("P4_trip_distribution",
+               "data",
+               "calib-flows.csv"))
+
+write_csv(betas_table,
+          here("P4_trip_distribution",
+               "data",
+               "calib-betas.csv"))
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Read the saved data
+flow_tt <- here("P4_trip_distribution",
+                "data",
+                "calib-flows.csv") |>
+  read_csv()
+
+betas_table <- here("P4_trip_distribution",
+                "data",
+                "calib-betas.csv") |>
+  read_csv()
+```
+
+# Calculating average travel time again after model calibration
+
+```{r}
+avg_tts <- avg_tts |>
+  select(-rmse) |>
+  mutate(`Average travel time (estimated)` = c(
+    sum(flow_tt$goods_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$goods_flow_est),
+    sum(flow_tt$trade_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$trade_flow_est),
+    sum(flow_tt$serve_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$serve_flow_est),
+    sum(flow_tt$total_flow_est * flow_tt$travel_time_p50) / 
+      sum(flow_tt$total_flow_est)))
+
+avg_tts |>
+  kable(digits = 1)
+```
+
+The average travel times observed vs. estimated seem closer
+
+# Reevaluating after model calibration 
+
+```{r}
+# Calculating RMSE
+avg_tts <- avg_tts |>
+  mutate(rmse = c((mean((flow_tt$flow_goods - flow_tt$goods_flow_est)^2))^0.5,
+                  (mean((flow_tt$flow_trade - flow_tt$trade_flow_est)^2))^0.5,
+                  (mean((flow_tt$flow_serve - flow_tt$serve_flow_est)^2))^0.5,
+                  (mean((flow_tt$flow_total - flow_tt$total_flow_est)^2))^0.5))
+
+kable(avg_tts, digits = 2)
+```
+
+```{r, message = FALSE, warning = FALSE}
+# Visually comparing estimated vs. observed
+
+# Goods sector
+plot_flows(flow_tt,
+           obs_col_name = "flow_goods",
+           est_col_name = "goods_flow_est")
+
+# Trade sector
+plot_flows(flow_tt,
+           obs_col_name = "flow_trade",
+           est_col_name = "trade_flow_est")
+
+# Service sector
+plot_flows(flow_tt,
+           obs_col_name = "flow_serve",
+           est_col_name = "serve_flow_est")
+
+# All workers
+plot_flows(flow_tt,
+           obs_col_name = "flow_total",
+           est_col_name = "total_flow_est")
+```
+
+# Interpreting calibrated parameters
+
+Calibrating the beta parameter resulted in an improved model fit. What does the difference in model results tell us about peoples' travel choices?
+
+```{r, message = FALSE, warning = FALSE}
+friction <- tibble(`Travel time (min)` = seq(1, 60, by=1)) |>
+  mutate(Goods = exp(-1 * betas_table$beta_calibrated[1] * `Travel time (min)`),
+         Trade = exp(-1 * betas_table$beta_calibrated[2] * `Travel time (min)`),
+         Service = exp(-1 * betas_table$beta_calibrated[3] * `Travel time (min)`),
+         `All industries` = 
+           exp(-1 * betas_table$beta_calibrated[4] * `Travel time (min)`)) |>
+  pivot_longer(cols = -`Travel time (min)`,
+               names_to = "Sector") |>
+  rename(`Destination attractiveness` = value) |>
+  filter(`Destination attractiveness` < 2)
+
+ggplot(friction) +
+  geom_line(aes(x = `Travel time (min)`,
+                y = `Destination attractiveness`,
+                linetype = Sector)) +
+  scale_x_continuous(breaks = seq(0, 60, by=5)) +
+  scale_y_continuous(breaks = seq(0, 2, by=0.1),
+                     limits = c(0, 1.5)) +
+  theme_minimal()
+```
+
 
 
 
