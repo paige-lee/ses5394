@@ -625,117 +625,99 @@ Our initial guess of $\beta = \frac{1}{c^*}$ was ok, but we can calibrate/improv
 ```{r, eval = FALSE}
 # Setting eval = FALSE to prevent from running again
 
+# Drop old estimates
 flow_tt <- flow_tt |>
-  select(-goods_flow_est,
-         -trade_flow_est,
-         -serve_flow_est)
+  select(-goods_flow_est, -trade_flow_est, -serve_flow_est, -total_flow_est)
 
-## Calibrate goods beta
-calibrated_flows_goods <- grvty_calibrate(obs_flow_tt = flow_tt,
-                                          o_id_col = "from_id",
-                                          d_id_col = "to_id",
-                                          obs_flow_col = "flow_goods",
-                                          tt_col = "travel_time_p50",
-                                          tolerance_balancing = 0.0001,
-                                          max_iter_balancing = 30,
-                                          tolerance_calibration = 0.2,
-                                          max_iter_calibration = 30)
+# ---- Calibrate goods sector ----
+calibrated_flows_goods <- grvty_calibrate(
+  obs_flow_tt = flow_tt,
+  o_id_col = "from_id",
+  d_id_col = "to_id",
+  obs_flow_col = "flow_goods",
+  tt_col = "travel_time_p50",
+  tolerance_balancing = 0.0001,
+  max_iter_balancing = 30,
+  tolerance_calibration = 0.2,
+  max_iter_calibration = 30
+)
 
 beta_goods <- calibrated_flows_goods$beta
 
 goods_flow_est <- calibrated_flows_goods$flows |>
-  rename(from_id = o_id,
-         to_id = d_id,
-         goods_flow_est = flow_est) |>
-  select(from_id, to_id, goods_flow_est)
+  rename(from_id = o_id, to_id = d_id, goods_flow_est = flow_est)
 
-flow_tt <- flow_tt |>
-  left_join(goods_flow_est)
-
-## Calibrate trade beta
-calibrated_flows_trade <- grvty_calibrate(obs_flow_tt = flow_tt,
-                                          o_id_col = "from_id",
-                                          d_id_col = "to_id",
-                                          obs_flow_col = "flow_trade",
-                                          tt_col = "travel_time_p50",
-                                          tolerance_balancing = 0.0001,
-                                          max_iter_balancing = 30,
-                                          tolerance_calibration = 0.2,
-                                          max_iter_calibration = 30)
+# ---- Calibrate trade sector ----
+calibrated_flows_trade <- grvty_calibrate(
+  obs_flow_tt = flow_tt,
+  o_id_col = "from_id",
+  d_id_col = "to_id",
+  obs_flow_col = "flow_trade",
+  tt_col = "travel_time_p50",
+  tolerance_balancing = 0.0001,
+  max_iter_balancing = 30,
+  tolerance_calibration = 0.2,
+  max_iter_calibration = 30
+)
 
 beta_trade <- calibrated_flows_trade$beta
 
 trade_flow_est <- calibrated_flows_trade$flows |>
-  rename(from_id = o_id,
-         to_id = d_id,
-         trade_flow_est = flow_est) |>
-  select(from_id, to_id, trade_flow_est)
+  rename(from_id = o_id, to_id = d_id, trade_flow_est = flow_est)
 
-flow_tt <- flow_tt |>
-  left_join(trade_flow_est)
-
-## calibrate service beta
-calibrated_flows_serve <- grvty_calibrate(obs_flow_tt = flow_tt,
-                                          o_id_col = "from_id",
-                                          d_id_col = "to_id",
-                                          obs_flow_col = "flow_serve",
-                                          tt_col = "travel_time_p50",
-                                          tolerance_balancing = 0.0001,
-                                          max_iter_balancing = 30,
-                                          tolerance_calibration = 0.2,
-                                          max_iter_calibration = 30)
+# ---- Calibrate service sector ----
+calibrated_flows_serve <- grvty_calibrate(
+  obs_flow_tt = flow_tt,
+  o_id_col = "from_id",
+  d_id_col = "to_id",
+  obs_flow_col = "flow_serve",
+  tt_col = "travel_time_p50",
+  tolerance_balancing = 0.0001,
+  max_iter_balancing = 30,
+  tolerance_calibration = 0.2,
+  max_iter_calibration = 30
+)
 
 beta_serve <- calibrated_flows_serve$beta
 
 serve_flow_est <- calibrated_flows_serve$flows |>
-  rename(from_id = o_id,
-         to_id = d_id,
-         serve_flow_est = flow_est) |>
-  select(from_id, to_id, serve_flow_est)
+  rename(from_id = o_id, to_id = d_id, serve_flow_est = flow_est)
 
-flow_tt <- flow_tt |>
-  left_join(serve_flow_est)
-
-## calibrate total beta
-calibrated_flows_total <- grvty_calibrate(obs_flow_tt = flow_tt,
-                                          o_id_col = "from_id",
-                                          d_id_col = "to_id",
-                                          obs_flow_col = "flow_total",
-                                          tt_col = "travel_time_p50",
-                                          tolerance_balancing = 0.0001,
-                                          max_iter_balancing = 30,
-                                          tolerance_calibration = 0.2,
-                                          max_iter_calibration = 30)
+# ---- Calibrate total sector ----
+calibrated_flows_total <- grvty_calibrate(
+  obs_flow_tt = flow_tt,
+  o_id_col = "from_id",
+  d_id_col = "to_id",
+  obs_flow_col = "flow_total",
+  tt_col = "travel_time_p50",
+  tolerance_balancing = 0.0001,
+  max_iter_balancing = 30,
+  tolerance_calibration = 0.2,
+  max_iter_calibration = 30
+)
 
 beta_total <- calibrated_flows_total$beta
 
 total_flow_est <- calibrated_flows_total$flows |>
-  rename(from_id = o_id,
-         to_id = d_id,
-         total_flow_est = flow_est) |>
-  select(from_id, to_id, total_flow_est)
+  rename(from_id = o_id, to_id = d_id, total_flow_est = flow_est)
 
+# ---- Join calibrated estimates ----
 flow_tt <- flow_tt |>
-  left_join(total_flow_est)
+  left_join(goods_flow_est, by = c("from_id", "to_id")) |>
+  left_join(trade_flow_est, by = c("from_id", "to_id")) |>
+  left_join(serve_flow_est, by = c("from_id", "to_id")) |>
+  left_join(total_flow_est, by = c("from_id", "to_id"))
 
-betas_table <- tibble(Industry = c("Goods", 
-                                   "Trade",
-                                   "Service",
-                                   "Total"),
-                      beta_initial = betas,
-                      beta_calibrated = c(beta_goods,
-                                          beta_trade,
-                                          beta_serve,
-                                          beta_total))
-write_csv(flow_tt,
-          here("P4_trip_distribution",
-               "data",
-               "calib-flows.csv"))
+# ---- Store calibrated beta values ----
+betas_table <- tibble(
+  Industry = c("Goods", "Trade", "Service", "Total"),
+  beta_initial = betas,
+  beta_calibrated = c(beta_goods, beta_trade, beta_serve, beta_total)
+)
 
-write_csv(betas_table,
-          here("P4_trip_distribution",
-               "data",
-               "calib-betas.csv"))
+# ---- Save calibrated flows and betas ----
+write_csv(flow_tt, here("P4_trip_distribution", "data", "calib-flows.csv"))
+write_csv(betas_table, here("P4_trip_distribution", "data", "calib-betas.csv"))
 ```
 
 ```{r, message = FALSE, warning = FALSE}
@@ -835,6 +817,8 @@ ggplot(friction) +
   theme_minimal()
 ```
 
-
-
+```{r}
+# Printing the betas table
+betas_table
+```
 
