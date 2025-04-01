@@ -623,8 +623,7 @@ plot_flows(flow_tt,
 Our initial guess of $\beta = \frac{1}{c^*}$ was ok, but we can calibrate/improve the beta values further
 
 ```{r, eval = FALSE}
-# Setting eval = FALSE to prevent from running again
-
+# Setting eval = FALSE to prevent from running every time
 # Drop old estimates
 flow_tt <- flow_tt |>
   select(-goods_flow_est, -trade_flow_est, -serve_flow_est, -total_flow_est)
