@@ -14,5 +14,5 @@ The goal of this assignment was to calibrate a gravity model for home-based work
 
 ### P5: Mode Choice
 
-The goal of this assignment was to predict whether adults (18-65) living in urban areas are more likely to walk for short trips (< 1.5mi) to run errands compared to adults (18-65) living in rural areas.
+The goal of this assignment was to use 2017 National Household Travel Survey (NHTS) data to predict whether adults (18-65) living in urban areas are more likely to walk for short trips (< 1.5mi) to run errands compared to adults (18-65) living in rural areas.
 
