@@ -11,3 +11,8 @@ The goal of this assignment was to model a specific trip purpose from the TDM23 
 ### P4: Trip Distribution
 
 The goal of this assignment was to calibrate a gravity model for home-based work trips across industries (goods, trade, service, and total jobs) using the LEHD data for a metropolitan or micropolitan area of my choice (I chose the micropolitan area Salem, Ohio).
+
+### P5: Mode Choice
+
+The goal of this assignment was to predict whether adults (18-65) living in urban areas are more likely to walk for short trips (< 1.5mi) to run errands compared to adults (18-65) living in rural areas.
+
